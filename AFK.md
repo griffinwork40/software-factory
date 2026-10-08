@@ -1,0 +1,57 @@
+# software-factory
+
+## What This Is
+
+An agent-afk plugin (`griffinwork40/software-factory`, MIT, v0.1.0) that turns a GitHub backlog into merged PRs. It holds no code: it is two prompt-only skills, each a single `SKILL.md`, that form one loop:
+
+- `/tackle-issues`: burns down N open issues in parallel, one worktree-isolated subagent and one PR per issue. No gates; PRs are proposals.
+- `/pr-triage`: reviews open PRs in parallel, buckets them (merge / fix / follow-up), then merges and fixes behind a human gate on every irreversible action.
+
+`/tackle-issues` produces PRs cheaply; `/pr-triage` is the safety net that decides what lands.
+
+## Commands
+
+There is no build, test, or lint step. The deliverable is markdown.
+
+```bash
+afk plugin install griffinwork40/software-factory   # install (registered subcommand, safe)
+afk plugin update software-factory                  # pick up pushed changes
+wc -l skills/*/SKILL.md                             # size check after edits
+grep -n '^#' skills/*/SKILL.md                      # section outline
+```
+
+Verify a skill change by running it for real against a repo with open issues/PRs (for example `/pr-triage --prs <N> --skip-fix` as a low-risk smoke test). Never shell out to `afk <skill-name>`: unknown subcommands launch a nested agent session.
+
+## Architecture
+
+| Path | Purpose |
+|------|---------|
+| `.claude-plugin/plugin.json` | Plugin manifest (name, version, description, repo). Bump `version` on release. |
+| `skills/tackle-issues/SKILL.md` | ~120 lines. Steps 1-4: discover issues, present hit list, parallel `agent` dispatch, report. |
+| `skills/pr-triage/SKILL.md` | ~315 lines. Waves 0 (preflight), 0.5 (Jev pre-filter), 1 (parallel `/review`), 1.5 (triage gate), 2A/2B/2C (merge, fix, advisory issues), 3 (re-review). |
+| `README.md` | User-facing overview, usage, requirements. Keep in sync with skill flags. |
+
+Skill dependencies:
+- `/pr-triage` declares `skills: [review, fix-pr, contract]`; those live in other plugins (agent-workflow-amplifiers), not here.
+- Wave 0.5 uses the optional `jev` MCP server (`TYPESAFE_API_KEY`). Default on for public repos, off for private ones because diffs leave the machine. It must stay fail-open.
+- Both skills require an authenticated `gh` CLI and fail closed without it.
+
+History: both skills were imported with full history from the standalone repos `griffinwork40/pr-triage` and `griffinwork40/tackle-issues`. The plugin is installed from GitHub (`~/.afk/plugins/software-factory/`), so local edits take effect only after push plus `afk plugin update software-factory`. Do not recreate standalone copies under `~/.afk/skills/`; they would load each skill twice.
+
+## Conventions
+
+**SKILL.md frontmatter** (YAML, required keys): `name`, `description`, `argument-hint`, `category`, `when-to-use`, `flags`. Optional: `skills` (sibling skill deps), `failure_modes`. Any new flag must appear in `argument-hint`, `flags`, the Arguments table, and README usage.
+
+**SKILL.md body** follows a fixed shape: H1 title, `## Hard constraints` (where gates exist), `## Arguments` table (Flag | Default | Meaning), `## Execution` with numbered `### Wave N` or `### Step N` sections, fenced templates for operator-facing output, and an explicit terminal-state section.
+
+**Dispatch rules encoded in the skills** (preserve when editing):
+- Parallel fan-out uses one `agent` tool call per item, all issued in a single reply, with `isolation: "worktree"`. Not `compose` (commit `fd7cd1f`, `c9870de` moved away from it).
+- Cap concurrency at 5; larger batches go in waves of 5.
+- Merges are strictly sequential with a CI check between each. `--auto-merge` is the only bypass of the per-merge human gate.
+- `/review` is read-only; only `/pr-triage` decides what gets posted to GitHub.
+- Subagent commits and PR bodies go through temp files (`git commit -F`, `gh pr create --body-file`), never inline `-m "..."` or `--body "..."`.
+- Subagents must not force-push, touch unrelated files, or combine issues.
+
+**Writing style:** tables over prose for flags and buckets; every irreversible step names its gate. Existing section headings use `Wave N — Title`; keep that form for consistency, but avoid dashes in new prose.
+
+**Commits:** conventional prefixes (`feat:`, `fix:`, `chore:`), messages via `git commit -F`. Agent identity is `AFK Agent <agent@agentafk.com>`.
