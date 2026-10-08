@@ -1,0 +1,10 @@
+{
+  "name": "software-factory",
+  "version": "0.1.0",
+  "description": "Turn a GitHub backlog into merged PRs: burn down issues into PRs in parallel, then review, triage, fix, and merge them behind human gates.",
+  "author": {
+    "name": "griffinwork40"
+  },
+  "repository": "https://github.com/griffinwork40/software-factory",
+  "license": "MIT"
+}
