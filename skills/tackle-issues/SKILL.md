@@ -28,19 +28,25 @@ Parse from the input:
 
 ### Step 1 — Discover issues
 
-If `--issues` provided, fetch those directly. Otherwise:
+Run `git fetch origin` once. Record:
+- `<default-branch>` via `gh repo view --json defaultBranchRef -q .defaultBranchRef.name`
+- `<head-sha>` via `git rev-parse origin/<default-branch>`
+
+This fetch also determines where isolated subagent worktrees start: the runtime bases `isolation: "worktree"` on the cached remote default ref, so after the fetch every subagent worktree will begin at `<head-sha>`.
+
+If `--issues` provided, fetch those issue records directly with `gh issue view <n> --json number,title,body,labels,assignees` for each. **Do not apply `--label`, `--skip`, or assignee filters to explicit `--issues`; those flags apply only to auto-discovered issues.** Otherwise:
 
 ```bash
 gh issue list --state open --limit <N * 2> --json number,title,body,labels,assignees
 ```
 
-Filter out issues that:
-- Already have an open PR linked (check: `gh pr list --search "issue:<number>"` or scan for branch naming conventions)
+Filter out issues that (auto-discover only):
 - Are assigned to someone else
 - Match `--skip` pattern
 - Don't match `--label` filter (if set)
+- Already have an open PR linked. Check via `gh issue view <number> --json closedByPullRequestsReferences` (linked PRs) plus `gh pr list --state open --search "#<number> in:title,body"` and scan open PRs whose branch name suggests the issue number. If any linked or referencing open PR exists, skip.
 
-Before selecting issues to dispatch, verify each candidate against the **current HEAD of the default branch**: freshly fetch the branch and inspect the issue's comments plus open PRs that reference it (`gh pr list --search '<number>'`). Do not rely on the issue body's snapshot. Skip and report an issue if its remaining acceptance items are already done or claimed by an open PR. Issue #3265 in `griffinwork40/agent-afk` illustrates the stale-body risk: its listed sites had already been fixed while the issue remained open.
+Before selecting issues to dispatch, verify **every candidate** (including explicit `--issues`) against `<head-sha>`: inspect the issue's comments and open referencing PRs (using the same linked-PR check defined above). Do not rely on the issue body's snapshot. Skip and report an issue if its remaining acceptance items are already done or claimed by an open PR. For example, an issue body can list sites that later commits already fixed while the issue stays open (as of 2026-10, `griffinwork40/agent-afk#3265` was in this state).
 
 Take the first `<N>` issues that pass filters and this verification.
 
@@ -62,6 +68,17 @@ Show the operator what's about to happen:
 Dispatching <N> parallel subagents in worktrees...
 ```
 
+If any candidates were skipped during selection, append a "Skipped at selection" table:
+
+```
+### Skipped at selection
+
+| # | Title | Reason |
+|---|-------|--------|
+| 198 | Fix typo in README | Already fixed on <head-sha> |
+| 200 | Update auth flow | Claimed by open PR #211 |
+```
+
 ### Step 3 — Parallel dispatch
 
 Dispatch one `agent` tool call per issue. Issue all calls for the current wave in a **single reply** so they run in parallel.
@@ -77,21 +94,23 @@ Each agent's prompt:
 You are fixing GitHub issue #<number> in <repo>.
 
 **Issue title:** <title>
+**Default-branch HEAD:** <head-sha> (<default-branch>)
 **Issue body:**
 <body>
 
 Instructions:
-1. Confirm the fetched current default-branch HEAD SHA; verify the issue comments and open referencing PRs have not made the remaining ask obsolete.
+1. Run `git rev-parse HEAD` and confirm it equals <head-sha>. If it does not, stop without editing any file and report **STALE-BASE** with both SHAs. Then verify the issue comments and open referencing PRs have not made the remaining ask obsolete; if obsolete, report **OBSOLETE** and stop.
 2. For a **BUG**, establish on current HEAD either a failing reproduction (test or command) or a concrete source-level demonstration (file:line of the defective code path and why it is reachable). If neither is possible, do not fix it; report **UNREPRODUCED** and what you checked.
 3. For a **PREVENTIVE/refactor/hygiene** issue, show evidence of the current risk on HEAD (for example, the hand-rolled site still exists at file:line, the gate fails, or the size remains over its ceiling). Cosmetic findings with no current risk are reported, not fixed.
-4. Make the fix only after that verification. Run relevant tests and `pnpm lint` (or the project's lint command) to verify the change compiles.
-5. Commit with message: `fix(#<number>): <short description>`
+4. For any **other issue type** (feature, test-gap, docs, or anything not covered above), confirm on HEAD that the requested change is not already present: cite the relevant file:line or paste the grep output showing absence. If already present, report **OBSOLETE** and stop.
+5. Make the fix only after whichever of steps 2, 3, or 4 applies. Run relevant tests and `pnpm lint` (or the project's lint command) to verify the change compiles.
+6. Commit with message: `fix(#<number>): <short description>`
    Use `git commit -F <tmpfile>` — never inline the message with -m.
-6. Create a PR:
+7. Create a PR:
    - `gh pr create --title "fix(#<number>): <short description>" --body-file <tmpfile>`
-   - PR body should reference `Closes #<number>`, briefly describe the change, and include a **Verified on HEAD** section naming the verified SHA and the reproduction, demonstration, or risk evidence.
+   - PR body should reference `Closes #<number>`, briefly describe the change, and include a **Verified on HEAD** section citing <head-sha> and the reproduction, demonstration, or risk evidence.
    - Add `--draft` flag if instructed.
-7. Report what you did: PR URL, files changed, tests run.
+8. Report what you did: PR URL, files changed, tests run.
 
 Do NOT:
 - Touch files unrelated to the issue
@@ -111,7 +130,11 @@ After all agent calls complete (all waves if batched), collect each agent's fina
 |---|-------|----|--------|---------|
 | 201 | Add null check in auth.ts:47 | #212 | ✅ | Added guard + test |
 | 203 | Remove unused import | #213 | ✅ | Removed 3 unused imports |
-| 207 | Add parser test | — | ❌ | Couldn't reproduce edge case |
+| 207 | Add parser test | — | UNREPRODUCED | Couldn't reproduce edge case |
+| 209 | Document config options | — | OBSOLETE | Change already present on <head-sha> |
+| 210 | Migrate auth helper | — | STALE-BASE | Worktree at abc123, expected <head-sha> |
+
+Status legend: ✅ PR opened | ❌ failed | UNREPRODUCED (no reproduction found) | OBSOLETE (already done or ask gone) | STALE-BASE (worktree SHA mismatch) | cosmetic (reported, not fixed)
 
 <N>/<M> issues tackled. Run `/pr-triage` to review and merge.
 ```
