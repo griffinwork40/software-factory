@@ -2,12 +2,13 @@
 
 ## What This Is
 
-An agent-afk plugin (`griffinwork40/software-factory`, MIT, v0.1.0) that turns a GitHub backlog into merged PRs. It holds no code: it is two prompt-only skills, each a single `SKILL.md`, that form one loop:
+An agent-afk plugin (`griffinwork40/software-factory`, MIT, v0.2.0) that turns a GitHub backlog into merged PRs. It holds no code: it is three prompt-only skills, each a single `SKILL.md`, that form one loop:
 
 - `/tackle-issues`: burns down N open issues in parallel, one worktree-isolated subagent and one PR per issue. No gates; PRs are proposals.
 - `/pr-triage`: reviews open PRs in parallel, buckets them (merge / fix / follow-up), then merges and fixes behind a human gate on every irreversible action.
+- `/land`: takes one PR to merged through a bounded review, fix, re-review loop, merges the exact reviewed SHA, and files deduped follow-up issues.
 
-`/tackle-issues` produces PRs cheaply; `/pr-triage` is the safety net that decides what lands.
+`/tackle-issues` produces PRs cheaply; `/pr-triage` is the safety net that decides what lands across the queue; `/land` converges a single PR that needs more than one fix pass.
 
 ## Commands
 
@@ -29,12 +30,14 @@ Verify a skill change by running it for real against a repo with open issues/PRs
 | `.claude-plugin/plugin.json` | Plugin manifest (name, version, description, repo). Bump `version` on release. |
 | `skills/tackle-issues/SKILL.md` | ~120 lines. Steps 1-4: discover issues, present hit list, parallel `agent` dispatch, report. |
 | `skills/pr-triage/SKILL.md` | ~315 lines. Waves 0 (preflight), 0.5 (Jev pre-filter), 1 (parallel `/review`), 1.5 (triage gate), 2A/2B/2C (merge, fix, advisory issues), 3 (re-review). |
+| `skills/land/SKILL.md` | ~165 lines. Single PR to merged. Phases 0 (preflight), 1 (review/fix round loop with convergence check), 2 (merge gate at reviewed SHA), 3 (deduped follow-up issues), 4 (close and verdict). `context: load`: must run top-level, never from a subagent. |
 | `README.md` | User-facing overview, usage, requirements. Keep in sync with skill flags. |
 
 Skill dependencies:
-- `/pr-triage` declares `skills: [review, fix-pr, contract]`; those live in other plugins (agent-workflow-amplifiers), not here.
+- `/pr-triage` and `/land` declare `skills: [review, fix-pr, contract]`; those live in other plugins (agent-workflow-amplifiers), not here.
+- `/land` invokes `/review` and `/fix-pr` directly from the coordinator, so `/pr-triage` cannot delegate per-PR work to it from a subagent without a redesign.
 - Wave 0.5 uses the optional `jev` MCP server (`TYPESAFE_API_KEY`). Default on for public repos, off for private ones because diffs leave the machine. It must stay fail-open.
-- Both skills require an authenticated `gh` CLI and fail closed without it.
+- All skills require an authenticated `gh` CLI and fail closed without it.
 
 History: both skills were imported with full history from the standalone repos `griffinwork40/pr-triage` and `griffinwork40/tackle-issues`. The plugin is installed from GitHub (`~/.afk/plugins/software-factory/`), so local edits take effect only after push plus `afk plugin update software-factory`. Do not recreate standalone copies under `~/.afk/skills/`; they would load each skill twice.
 
