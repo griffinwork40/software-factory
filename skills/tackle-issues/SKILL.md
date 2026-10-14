@@ -40,7 +40,9 @@ Filter out issues that:
 - Match `--skip` pattern
 - Don't match `--label` filter (if set)
 
-Take the first `<N>` issues that pass filters.
+Before selecting issues to dispatch, verify each candidate against the **current HEAD of the default branch**: freshly fetch the branch and inspect the issue's comments plus open PRs that reference it (`gh pr list --search '<number>'`). Do not rely on the issue body's snapshot. Skip and report an issue if its remaining acceptance items are already done or claimed by an open PR. Issue #3265 in `griffinwork40/agent-afk` illustrates the stale-body risk: its listed sites had already been fixed while the issue remained open.
+
+Take the first `<N>` issues that pass filters and this verification.
 
 If 0 issues pass, report Done with "No eligible issues found" and stop.
 
@@ -79,15 +81,15 @@ You are fixing GitHub issue #<number> in <repo>.
 <body>
 
 Instructions:
-1. Read the issue carefully. Understand the specific ask.
-2. Find the relevant file(s) and make the fix.
-3. Run the project's test command if a test file is relevant to your change.
-4. Run `pnpm lint` (or the project's lint command) to verify your change compiles.
+1. Confirm the fetched current default-branch HEAD SHA; verify the issue comments and open referencing PRs have not made the remaining ask obsolete.
+2. For a **BUG**, establish on current HEAD either a failing reproduction (test or command) or a concrete source-level demonstration (file:line of the defective code path and why it is reachable). If neither is possible, do not fix it; report **UNREPRODUCED** and what you checked.
+3. For a **PREVENTIVE/refactor/hygiene** issue, show evidence of the current risk on HEAD (for example, the hand-rolled site still exists at file:line, the gate fails, or the size remains over its ceiling). Cosmetic findings with no current risk are reported, not fixed.
+4. Make the fix only after that verification. Run relevant tests and `pnpm lint` (or the project's lint command) to verify the change compiles.
 5. Commit with message: `fix(#<number>): <short description>`
    Use `git commit -F <tmpfile>` — never inline the message with -m.
 6. Create a PR:
    - `gh pr create --title "fix(#<number>): <short description>" --body-file <tmpfile>`
-   - PR body should reference `Closes #<number>` and briefly describe what changed.
+   - PR body should reference `Closes #<number>`, briefly describe the change, and include a **Verified on HEAD** section naming the verified SHA and the reproduction, demonstration, or risk evidence.
    - Add `--draft` flag if instructed.
 7. Report what you did: PR URL, files changed, tests run.
 
