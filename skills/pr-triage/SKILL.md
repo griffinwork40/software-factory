@@ -210,7 +210,30 @@ sub-wave. Never overlap buckets.
 
 #### 2A — Merge Green PRs
 
-For each GREEN PR, **sequentially** (never parallel):
+**0. Plan a conflict-minimizing merge order (local, no writes to any remote).**
+Merging green PRs in arbitrary order lets an early merge knock a later,
+otherwise-clean PR into conflict, which then costs a rebase, a gate re-run, and
+often a second rebase when the next sibling lands. Simulate the batch first:
+
+```bash
+git fetch origin <base> && for n in <green PRs>; do git fetch origin pull/$n/head:refs/pr-sim/$n; done
+sim=$(git rev-parse origin/<base>)
+# For each PR, smallest diff first (gh pr view <N> --json additions,deletions):
+if tree=$(git merge-tree --write-tree "$sim" refs/pr-sim/<N>); then
+  sim=$(git commit-tree "$tree" -p "$sim" -p refs/pr-sim/<N> -m sim)   # clean → keep in order
+else
+  : # conflicts with the batch so far → move <N> to the END of the order
+fi
+```
+
+Merge in the resulting order: clean PRs first, conflicting ones last. A PR that
+conflicts in simulation is still attempted last (its conflict may be with a PR
+the operator later declines), and goes to BLOCKED by step 1 if it really does
+conflict. Show the planned order and the simulated conflicts in the merge
+confirm. Requires git ≥ 2.38 (`merge-tree --write-tree`); on older git, skip
+this step. Delete the `refs/pr-sim/*` refs afterwards.
+
+For each GREEN PR in that order, **sequentially** (never parallel):
 
 1. Re-check mergeability: `gh pr view <N> --json mergeable,mergeStateStatus`.
    If no longer mergeable (conflict from sibling merge), move to BLOCKED bucket
@@ -235,6 +258,12 @@ For each BLOCKED PR, dispatch `/fix-pr`:
 - If 2+ blocked PRs: dispatch parallel `agent` calls, each calling `skill fix-pr <N>`.
   `/fix-pr` handles its own worktree creation internally, so no `isolation: "worktree"` is needed on the dispatch.
 - Max 3 concurrent fix agents (narrower than review wave — fixes are heavier).
+- PRs moved here only because a sibling merge made them conflict: dispatch them
+  after 2A has finished, once, so each is rebased onto the final base rather than
+  once per sibling merge. Tell the fix agent: resolve code conflicts first, then,
+  if the repo documents a regenerate command for generated or baseline files (check
+  AFK.md / CLAUDE.md / CONTRIBUTING / `.gitattributes`; agent-afk has
+  `pnpm regen:generated`), run it instead of hand-merging those files.
 
 `/fix-pr` handles its own worktree creation, test gate, push, and cleanup.
 After all fix agents return, present results:
