@@ -85,7 +85,7 @@ Parse these from `$ARGUMENTS`:
 Re-read `mergeable`. If `UNKNOWN`, poll it (`wait_for` command, 10 s interval, 2 min max). If `CONFLICTING`:
 - `worktree create` (name `land-<pr>-sync`, base = head branch after `git fetch`). Never raw `git worktree add`.
 - In it: `git merge origin/<base>`. If clean → run the project's lint + test gates → plain push.
-- If conflicted → dispatch ONE subagent (`cwd` = the worktree, sonnet, `max_tool_use_iterations: 60`) to resolve, preserving the intent of both sides, and to run the gates. Brief it to resolve code conflicts first, then regenerate generated or baseline files with the repo's documented command if one exists (check AFK.md / CLAUDE.md / CONTRIBUTING / `.gitattributes`; agent-afk has `pnpm regen:generated`) instead of hand-merging them. It must not push. The coordinator then checks `git diff --check`, checks that no `<<<<<<<`/`>>>>>>>` markers remain in tracked files, re-runs the gates itself, commits the merge, and pushes plain.
+- If conflicted → dispatch ONE subagent (`cwd` = the worktree, `max_tool_use_iterations: 60`) to resolve, preserving the intent of both sides, and to run the gates. Brief it to resolve code conflicts first, then regenerate generated or baseline files with the repo's documented command if one exists (check AFK.md / CLAUDE.md / CONTRIBUTING / `.gitattributes`; agent-afk has `pnpm regen:generated`) instead of hand-merging them. It must not push. The coordinator then checks `git diff --check`, checks that no `<<<<<<<`/`>>>>>>>` markers remain in tracked files, re-runs the gates itself, commits the merge, and pushes plain.
 - Gates red after one resolution attempt → BLOCKED with the worktree kept.
 - Ledger: `round r: synced base <sha> → head <sha>`.
 
