@@ -57,13 +57,22 @@ Parse these from `$ARGUMENTS`:
 ### Wave 0 — Preflight (inline, no dispatch)
 
 1. Verify `gh` CLI is authenticated: `gh auth status`. **Fail closed** if not.
+   Verify `gh` version is 2.41 or later (`gh --version`); versions before 2.41
+   lack `--match-head-commit` and will fail at merge time. **Fail closed** if not met.
 2. Determine target repo from `--repo` flag or `gh repo view --json nameWithOwner`.
-3. Fetch open PRs:
+3. Create the per-run scratch directory used by all later waves. Generate the name
+   **once** with:
+   `echo ".afk/tmp/pr-triage-$(date +%Y%m%d-%H%M%S)-$(openssl rand -hex 3)"`
+   Record the literal string it prints (e.g. `.afk/tmp/pr-triage-20240101-120000-a1b2c3`);
+   this is the **run dir**. Use that literal string — never a shell variable — in
+   every subsequent command, tool argument, and file path that references it.
+   Run `mkdir -p <run-dir>` immediately.
+4. Fetch open PRs:
    - If `--prs` provided: `gh pr view <N> --json number,title,headRefName,headRefOid,url,author,reviewDecision,statusCheckRollup,isDraft` for each.
    - Otherwise: `gh pr list --state open --limit <limit> --json number,title,headRefName,headRefOid,url,author,reviewDecision,statusCheckRollup,isDraft`.
    Record each PR's `headRefOid` as `fetched_sha` for later staleness checks.
-4. If 0 PRs found, report Done with "No open PRs to triage" and stop.
-5. Print the PR manifest table to the operator:
+5. If 0 PRs found, report Done with "No open PRs to triage" and stop.
+6. Print the PR manifest table to the operator:
 
 ```
 ## PR Triage — <repo> — <N> open PRs
@@ -101,20 +110,12 @@ Full route:
 
 **Steps:**
 
-1. Create a per-run scratch directory to avoid collisions with concurrent triage
-   sessions. Generate the name **once** with:
-   `echo ".afk/tmp/pr-triage-$(date +%Y%m%d-%H%M%S)-$(openssl rand -hex 3)"`
-   Record the literal string it prints (e.g. `.afk/tmp/pr-triage-20240101-120000-a1b2c3`);
-   this is the **run dir**. Use that literal string — never a shell variable — in
-   every subsequent command, tool argument, and file path that references it.
-   Run `mkdir -p <run-dir>`, then for each PR write its title, body,
-   changed-file list, and diff to `<run-dir>/<N>.txt` under the current
-   working directory, using shell redirection only (for example
+1. For each PR write its title, body, changed-file list, and diff to
+   `<run-dir>/<N>.txt` under the current working directory, using shell
+   redirection only (for example
    `{ gh pr view <N> --repo <repo> --json title,body,files --jq '.title, .body, (.files[].path)'; gh pr diff <N> --repo <repo>; } > <run-dir>/<N>.txt`).
    Do not read these files yourself. They must sit under the working directory,
    because the Jev server only reads paths below the directory it started in.
-   **The run dir must be created even if Wave 0.5 is skipped**, because later
-   waves write issue and squash body files there.
 2. Make **one** `mcp__jev__jev_triage` call with one item per PR
    (`{ "id": "<N>", "path": "<run-dir>/<N>.txt" }`),  
    `yes_at_or_above: 0.85`, `no_at_or_below: 0.2`, and these questions:
@@ -270,10 +271,14 @@ For each GREEN PR in that order, **sequentially** (never parallel):
    `gh pr view <N> --json state,headRefOid,mergeable,mergeStateStatus`.
    - `state` is not `OPEN` → SKIP ("merged/closed by another actor"); **continue**
      to the next PR instead of stopping the merge loop.
-   - `headRefOid` differs from `fetched_sha` → do not merge. Inform operator:
-     "#<N> head moved (<old_sha7> → <new_sha7>) after review; skipping merge.
-     Re-triage to review the new head, or approve merging the unreviewed SHA."
-     Move to SKIP.
+   - `headRefOid` differs from `fetched_sha` → do not merge automatically.
+     Inform the operator: "#<N> head moved (<old_sha7> → <new_sha7>) after
+     review; the new commits are unreviewed. To proceed safely, re-triage."
+     **Gate:** if the operator explicitly names the new SHA and approves merging
+     it unreviewed, re-fetch `headRefOid` to confirm the PR has not moved
+     again, then merge with `--match-head-commit <new_sha>` and note
+     "merged unreviewed SHA <new_sha7>" in the terminal summary. Otherwise
+     move to SKIP.
    - Not mergeable (conflict from sibling merge) → move to BLOCKED bucket
      and inform operator.
 2. Unless `--auto-merge` is set, confirm with operator:
@@ -351,14 +356,19 @@ Create these issues? (y/n/edit/skip)
 
 On approval, **deduplicate before creating.** For each drafted issue, search
 open issues first:
-`gh issue list --state open --search "<PR number> advisory findings in:title" --limit 5 --json number,title`.
-If a matching issue exists (title contains the PR number and "advisory findings"),
-add only the non-duplicate findings as a comment:
-`gh issue comment <existing> --body-file <run-dir>/comment-<N>.txt` and note `existing #<n>` in
-the terminal summary. Otherwise create:
+`gh issue list --state open --search "\"review: advisory findings from #<N>\" in:title" --limit 5 --json number,title`.
+Confirm an exact title-prefix match: the returned issue title must begin with
+`review: advisory findings from #<N>`. A loose keyword match is not sufficient.
+If a confirmed match exists, write the non-duplicate findings to a comment
+body file first:
+`printf '%s' "<comment body>" > <run-dir>/comment-<N>.txt`
+then post:
+`gh issue comment <existing> --body-file <run-dir>/comment-<N>.txt`
+and note `existing #<existing>` in the terminal summary. Otherwise write the
+draft body to `<run-dir>/issue-<N>.txt` first, then create:
 `gh issue create --title "..." --body-file <run-dir>/issue-<N>.txt`.
-Write all issue body drafts and squash body files to `<run-dir>/` so they are
-cleaned up with the rest of the run's scratch files.
+Write all issue body drafts and comment body files to `<run-dir>/` so they
+are cleaned up with the rest of the run's scratch files.
 On "skip": omit without creating. Advisory issues are optional — the operator
 may reasonably skip all of them.
 
