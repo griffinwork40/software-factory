@@ -49,8 +49,8 @@ Filter out issues that (auto-discover only):
 Before selecting issues to dispatch, verify **every candidate** (including explicit `--issues`) against `<head-sha>`. For each candidate issue `<N>`:
 
 1. Check open referencing PRs and issue comments (as above).
-2. Run `git log origin/<default-branch> --oneline --grep "#<N>"` to find commits that reference the issue.
-3. Run `gh pr list --state merged --search "<N>"` to find merged PRs that mention the issue.
+2. Run `git log origin/<default-branch> --oneline -E --grep "#<N>\b"` to find commits that reference the issue (the `\b` word boundary prevents `#20` from matching `#200`; any match still warrants inspection).
+3. Run `gh pr list --state merged --search "#<N>"` to find merged PRs that mention the issue (scan titles and bodies for an exact `#<N>` reference before concluding the issue is addressed).
 
 If any merged commits or merged PRs exist for a candidate, inspect the issue's remaining acceptance items against HEAD. If nothing remains unaddressed, skip and report as **already-done**. If partial work was merged but items remain, note the remaining items and include the candidate (the subagent will address only what is left).
 
@@ -112,26 +112,26 @@ Instructions:
 4. For any **other issue type** (feature, test-gap, docs, or anything not covered above), confirm on HEAD that the requested change is not already present: cite the relevant file:line or paste the grep output showing absence. If already present, report **OBSOLETE** and stop.
 5. Make the fix only after whichever of steps 2, 3, or 4 applies. Run relevant tests and `pnpm lint` (or the project's lint command) to verify the change compiles.
 6. Commit with message: `fix(#<number>): <short description>`
-   Use `git commit -F - <<'EOF'` — never inline the message with -m, and never use
-   `$(cat <<'EOF' ...)` command substitution (macOS bash 3.2 mis-parses apostrophes
-   inside it, exit 2). Pipe via `--body-file - <<'EOF'` for PR bodies too.
+   Write the message to a temp file inside your worktree (not /tmp, which forked
+   subagents are denied) using the file-write tool or a quoted heredoc redirected
+   to the file. Do not commit the temp file. Then run:
+   `git commit -F <tmpfile>`
+   Do not: inline the message with `-m`; use `git commit -F - <<'EOF'` stdin
+   heredocs; or use `$(cat <<'EOF' ...)` command substitution (macOS bash 3.2
+   mis-parses apostrophes inside it, exit 2).
 7. Create a PR. Choose the closing keyword carefully:
    - Use `Closes #<number>` when this PR completes **every remaining acceptance item**
      for the issue (including cases where earlier partial PRs used `Refs #<number>`
      and this PR addresses what was left).
    - Use `Refs #<number>` only when this PR covers **partial work** and items remain.
      In that case, immediately post a comment on the issue listing the exact remaining
-     items so the next agent can find them:
-     ```
-     gh issue comment <number> --body-file - <<'EOF'
-     Partial work landed in PR #<pr-number>. Remaining items:
-     - <item 1>
-     - <item 2>
-     EOF
-     ```
+     items so the next agent can find them. Write the comment body to a temp file
+     inside your worktree (not /tmp), then run:
+     `gh issue comment <number> --body-file <tmpfile>`
    - For a **tracking/checklist issue**, you may address one unchecked box per PR
      using `Refs #<number>` and naming the checkbox in the PR title and body.
-   - `gh pr create --title "fix(#<number>): <short description>" --body-file - <<'EOF'`
+   - Write the PR body to a temp file inside your worktree (not /tmp), then run:
+     `gh pr create --title "fix(#<number>): <short description>" --body-file <tmpfile>`
    - PR body must include the chosen closing/refs keyword, a brief description of the
      change, and a **Verified on HEAD** section citing <head-sha> and the reproduction,
      demonstration, or risk evidence.
