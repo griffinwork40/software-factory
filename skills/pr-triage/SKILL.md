@@ -102,16 +102,21 @@ Full route:
 **Steps:**
 
 1. Create a per-run scratch directory to avoid collisions with concurrent triage
-   sessions: `RUN_DIR=".afk/tmp/pr-triage-$(echo $AFK_SESSION_ID | head -c 8)"` if
-   `$AFK_SESSION_ID` is set, otherwise `RUN_DIR=".afk/tmp/pr-triage-$(date +%s)-$$"`.
-   Run `mkdir -p "$RUN_DIR"`, then for each PR write its title, body,
-   changed-file list, and diff to `"$RUN_DIR/<N>.txt"` under the current
+   sessions. Generate the name **once** with:
+   `echo ".afk/tmp/pr-triage-$(date +%Y%m%d-%H%M%S)-$(openssl rand -hex 3)"`
+   Record the literal string it prints (e.g. `.afk/tmp/pr-triage-20240101-120000-a1b2c3`);
+   this is the **run dir**. Use that literal string — never a shell variable — in
+   every subsequent command, tool argument, and file path that references it.
+   Run `mkdir -p <run-dir>`, then for each PR write its title, body,
+   changed-file list, and diff to `<run-dir>/<N>.txt` under the current
    working directory, using shell redirection only (for example
-   `{ gh pr view <N> --repo <repo> --json title,body,files --jq '.title, .body, (.files[].path)'; gh pr diff <N> --repo <repo>; } > "$RUN_DIR/<N>.txt"`).
+   `{ gh pr view <N> --repo <repo> --json title,body,files --jq '.title, .body, (.files[].path)'; gh pr diff <N> --repo <repo>; } > <run-dir>/<N>.txt`).
    Do not read these files yourself. They must sit under the working directory,
    because the Jev server only reads paths below the directory it started in.
+   **The run dir must be created even if Wave 0.5 is skipped**, because later
+   waves write issue and squash body files there.
 2. Make **one** `mcp__jev__jev_triage` call with one item per PR
-   (`{ "id": "<N>", "path": "$RUN_DIR/<N>.txt" }`),  
+   (`{ "id": "<N>", "path": "<run-dir>/<N>.txt" }`),  
    `yes_at_or_above: 0.85`, `no_at_or_below: 0.2`, and these questions:
    - `trivial` (check): "Is every change in this pull request limited to
      documentation, comments, formatting, lockfiles, or dependency version
@@ -349,10 +354,10 @@ open issues first:
 `gh issue list --state open --search "<PR number> advisory findings in:title" --limit 5 --json number,title`.
 If a matching issue exists (title contains the PR number and "advisory findings"),
 add only the non-duplicate findings as a comment:
-`gh issue comment <existing> --body-file <tmpfile>` and note `existing #<n>` in
+`gh issue comment <existing> --body-file <run-dir>/comment-<N>.txt` and note `existing #<n>` in
 the terminal summary. Otherwise create:
-`gh issue create --title "..." --body-file "$RUN_DIR/issue-<N>.txt"`.
-Write all issue body drafts and squash body files to `$RUN_DIR/` so they are
+`gh issue create --title "..." --body-file <run-dir>/issue-<N>.txt`.
+Write all issue body drafts and squash body files to `<run-dir>/` so they are
 cleaned up with the rest of the run's scratch files.
 On "skip": omit without creating. Advisory issues are optional — the operator
 may reasonably skip all of them.
@@ -385,6 +390,7 @@ Report Done with a structured summary:
 Session closed <N> of <M> PRs. Pre-filter: <on: X light, Y deferred | off: reason>.
 ```
 
-If Wave 0.5 ran, delete `$RUN_DIR/` (the per-run scratch directory) before
-reporting. Never delete the parent `.afk/tmp/` directory or other runs'
-directories.
+Delete the run dir before reporting: `rm -r <run-dir>`, using the literal path
+recorded at run start. Only proceed with deletion if the path starts with
+`.afk/tmp/pr-triage-`; never delete `.afk/tmp/` itself or any other run's
+directory. This cleanup runs regardless of whether Wave 0.5 ran.
