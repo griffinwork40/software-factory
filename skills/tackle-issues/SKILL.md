@@ -49,7 +49,7 @@ Filter out issues that (auto-discover only):
 Before selecting issues to dispatch, verify **every candidate** (including explicit `--issues`) against `<head-sha>`. For each candidate issue `<N>`:
 
 1. Check open referencing PRs and issue comments (as above).
-2. Run `git log origin/<default-branch> --oneline -E --grep "#<N>\b"` to find commits that reference the issue (the `\b` word boundary prevents `#20` from matching `#200`; any match still warrants inspection).
+2. Run `git log origin/<default-branch> --oneline -E --grep "#<N>([^0-9]|$)"` to find commits that reference the issue (the `([^0-9]|$)` suffix prevents `#20` from matching `#200`; do not use `\b`, which POSIX ERE does not support, so git silently matches nothing; any match still warrants inspection).
 3. Run `gh pr list --state merged --search "#<N>"` to find merged PRs that mention the issue (scan titles and bodies for an exact `#<N>` reference before concluding the issue is addressed).
 
 If any merged commits or merged PRs exist for a candidate, inspect the issue's remaining acceptance items against HEAD. If nothing remains unaddressed, skip and report as **already-done**. If partial work was merged but items remain, note the remaining items and include the candidate (the subagent will address only what is left).
