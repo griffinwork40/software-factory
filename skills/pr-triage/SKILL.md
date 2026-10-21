@@ -12,6 +12,9 @@ failure_modes:
   - merge_conflict_after_sibling_merge
   - fix_agent_misreads_stale_comment
   - gh_auth_missing
+  - concurrent_run_scratch_collision
+  - merge_of_unreviewed_head_sha
+  - duplicate_advisory_issues
 ---
 
 # PR Triage — decision-support orchestrator
@@ -54,12 +57,22 @@ Parse these from `$ARGUMENTS`:
 ### Wave 0 — Preflight (inline, no dispatch)
 
 1. Verify `gh` CLI is authenticated: `gh auth status`. **Fail closed** if not.
+   Verify `gh` version is 2.41 or later (`gh --version`); versions before 2.41
+   lack `--match-head-commit` and will fail at merge time. **Fail closed** if not met.
 2. Determine target repo from `--repo` flag or `gh repo view --json nameWithOwner`.
-3. Fetch open PRs:
-   - If `--prs` provided: `gh pr view <N> --json number,title,headRefName,url,author,reviewDecision,statusCheckRollup,isDraft` for each.
-   - Otherwise: `gh pr list --state open --limit <limit> --json number,title,headRefName,url,author,reviewDecision,statusCheckRollup,isDraft`.
-4. If 0 PRs found, report Done with "No open PRs to triage" and stop.
-5. Print the PR manifest table to the operator:
+3. Create the per-run scratch directory used by all later waves. Generate the name
+   **once** with:
+   `echo ".afk/tmp/pr-triage-$(date +%Y%m%d-%H%M%S)-$(openssl rand -hex 3)"`
+   Record the literal string it prints (e.g. `.afk/tmp/pr-triage-20240101-120000-a1b2c3`);
+   this is the **run dir**. Use that literal string — never a shell variable — in
+   every subsequent command, tool argument, and file path that references it.
+   Run `mkdir -p <run-dir>` immediately.
+4. Fetch open PRs:
+   - If `--prs` provided: `gh pr view <N> --json number,title,headRefName,headRefOid,url,author,reviewDecision,statusCheckRollup,isDraft` for each.
+   - Otherwise: `gh pr list --state open --limit <limit> --json number,title,headRefName,headRefOid,url,author,reviewDecision,statusCheckRollup,isDraft`.
+   Record each PR's `headRefOid` as `fetched_sha` for later staleness checks.
+5. If 0 PRs found, report Done with "No open PRs to triage" and stop.
+6. Print the PR manifest table to the operator:
 
 ```
 ## PR Triage — <repo> — <N> open PRs
@@ -97,14 +110,14 @@ Full route:
 
 **Steps:**
 
-1. Run `mkdir -p .afk/tmp/pr-triage`, then for each PR write its title, body,
-   changed-file list, and diff to `.afk/tmp/pr-triage/<N>.txt` under the current
-   working directory, using shell redirection only (for example
-   `{ gh pr view <N> --repo <repo> --json title,body,files --jq '.title, .body, (.files[].path)'; gh pr diff <N> --repo <repo>; } > .afk/tmp/pr-triage/<N>.txt`).
+1. For each PR write its title, body, changed-file list, and diff to
+   `<run-dir>/<N>.txt` under the current working directory, using shell
+   redirection only (for example
+   `{ gh pr view <N> --repo <repo> --json title,body,files --jq '.title, .body, (.files[].path)'; gh pr diff <N> --repo <repo>; } > <run-dir>/<N>.txt`).
    Do not read these files yourself. They must sit under the working directory,
    because the Jev server only reads paths below the directory it started in.
 2. Make **one** `mcp__jev__jev_triage` call with one item per PR
-   (`{ "id": "<N>", "path": ".afk/tmp/pr-triage/<N>.txt" }`),
+   (`{ "id": "<N>", "path": "<run-dir>/<N>.txt" }`),  
    `yes_at_or_above: 0.85`, `no_at_or_below: 0.2`, and these questions:
    - `trivial` (check): "Is every change in this pull request limited to
      documentation, comments, formatting, lockfiles, or dependency version
@@ -164,7 +177,17 @@ A PR with no `risk` score (its item errored) counts as highest risk.
 
 ### Wave 1.5 — Triage Gate (inline, no dispatch)
 
-Classify each PR into exactly one bucket based on the review verdict:
+**Re-fetch PR state before classifying.** For every PR that was reviewed (Full or
+Light route), run
+`gh pr view <N> --json state,headRefOid,mergedAt,closedAt`.
+- `state` is `MERGED` or `CLOSED` → put the PR into **SKIP** with reason
+  (e.g. "merged elsewhere by @actor at <mergedAt>"). Do not classify it further.
+- `headRefOid` differs from the `fetched_sha` recorded in Wave 0 → the head
+  moved after the review started. Mark the review **stale** and put the PR into
+  **SKIP** with reason "head moved (<old_sha7> → <new_sha7>); re-triage to
+  review the new head".
+
+Classify each remaining PR into exactly one bucket based on the review verdict:
 
 | Bucket | Criteria |
 |--------|----------|
@@ -203,6 +226,15 @@ Awaiting your approval to proceed. Reply with:
 If on a non-interactive surface (daemon, one-shot), **stop here** — emit the
 triage table as the terminal artifact and report Done.
 
+**Re-fetch after approval.** The operator may take minutes or hours to respond.
+After approval returns, re-fetch every PR still in GREEN or BLOCKED:
+`gh pr view <N> --json state,headRefOid`.
+- `state` is `MERGED` or `CLOSED` → move to SKIP; report
+  "#<N> was <merged/closed> while waiting for approval".
+- `headRefOid` differs from `fetched_sha` → move to SKIP with reason
+  "head moved after review; re-triage needed".
+If any PR moved, re-print the updated triage table before proceeding.
+
 ### Wave 2 — Execute Buckets (sequential, human-gated)
 
 Execute buckets in this order: Merge → Fix. Each bucket is a sequential
@@ -235,16 +267,29 @@ this step. Delete the `refs/pr-sim/*` refs afterwards.
 
 For each GREEN PR in that order, **sequentially** (never parallel):
 
-1. Re-check mergeability: `gh pr view <N> --json mergeable,mergeStateStatus`.
-   If no longer mergeable (conflict from sibling merge), move to BLOCKED bucket
-   and inform operator.
+1. Re-check state and mergeability:
+   `gh pr view <N> --json state,headRefOid,mergeable,mergeStateStatus`.
+   - `state` is not `OPEN` → SKIP ("merged/closed by another actor"); **continue**
+     to the next PR instead of stopping the merge loop.
+   - `headRefOid` differs from `fetched_sha` → do not merge automatically.
+     Inform the operator: "#<N> head moved (<old_sha7> → <new_sha7>) after
+     review; the new commits are unreviewed. To proceed safely, re-triage."
+     **Gate:** if the operator explicitly names the new SHA and approves merging
+     it unreviewed, re-fetch `headRefOid` to confirm the PR has not moved
+     again, then merge with `--match-head-commit <new_sha>` and note
+     "merged unreviewed SHA <new_sha7>" in the terminal summary. Otherwise
+     move to SKIP.
+   - Not mergeable (conflict from sibling merge) → move to BLOCKED bucket
+     and inform operator.
 2. Unless `--auto-merge` is set, confirm with operator:
    `"Merge #<N> '<title>' into <base>? (y/n)"`
    `--auto-merge` does not cover PRs on the Light route: always confirm those
    individually, since they were reviewed on a cheaper model.
-3. Merge: `gh pr merge <N> --merge --delete-branch`
+3. Merge: `gh pr merge <N> --merge --delete-branch --match-head-commit <fetched_sha>`
    (Use `--merge` not `--squash` unless the PR is single-commit; respect repo's
-   merge strategy if detectable from `gh api repos/{owner}/{repo}` settings.)
+   merge strategy if detectable from `gh api repos/{owner}/{repo}` settings.
+   `--match-head-commit` ensures GitHub refuses the merge if the head moved
+   after the review.)
 4. **After each merge**, verify the base branch CI:
    - `gh pr checks` on the next candidate (if any) — if the base branch now
      shows failures, **stop merging** and inform the operator.
@@ -309,7 +354,24 @@ Batch-present all drafted issues to the operator for approval:
 Create these issues? (y/n/edit/skip)
 ```
 
-On approval: `gh issue create --title "..." --body-file <tmpfile>` for each.
+On approval, **deduplicate before creating.** For each drafted issue, search
+open issues first:
+`gh issue list --state open --search "\"review: advisory findings from #<N>\" in:title" --limit 5 --json number,title`.
+Confirm an exact title-prefix match: the returned issue title must begin with
+`review: advisory findings from #<N>`. A loose keyword match is not sufficient.
+Write every body file with the `write_file` tool, or with a quoted heredoc
+redirected to the file (`cat > <run-dir>/issue-<N>.txt <<'EOF'`). Never place a
+markdown body inside double quotes in a shell command (for example
+`printf '%s' "<body>"` or `echo "<body>"`): the shell expands `$` and backticks
+in the body and silently corrupts the code spans.
+If a confirmed match exists, write the non-duplicate findings to
+`<run-dir>/comment-<N>.txt`, then post:
+`gh issue comment <existing> --body-file <run-dir>/comment-<N>.txt`
+and note `existing #<existing>` in the terminal summary. Otherwise write the
+draft body to `<run-dir>/issue-<N>.txt`, then create:
+`gh issue create --title "..." --body-file <run-dir>/issue-<N>.txt`.
+Write all issue body drafts and comment body files to `<run-dir>/` so they
+are cleaned up with the rest of the run's scratch files.
 On "skip": omit without creating. Advisory issues are optional — the operator
 may reasonably skip all of them.
 
@@ -341,4 +403,7 @@ Report Done with a structured summary:
 Session closed <N> of <M> PRs. Pre-filter: <on: X light, Y deferred | off: reason>.
 ```
 
-If Wave 0.5 ran, delete `.afk/tmp/pr-triage/` before reporting.
+Delete the run dir before reporting: `rm -r <run-dir>`, using the literal path
+recorded at run start. Only proceed with deletion if the path starts with
+`.afk/tmp/pr-triage-`; never delete `.afk/tmp/` itself or any other run's
+directory. This cleanup runs regardless of whether Wave 0.5 ran.
