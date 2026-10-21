@@ -143,6 +143,10 @@ Do NOT:
 - Make architectural changes or large refactors
 - Combine multiple issues into one PR
 - Force push or modify other branches
+- Run `git stash` or `git stash pop`. The stash ref is shared by every
+  worktree of the repo, so a pop here applies and drops a sibling
+  agent's stash. To set changes aside, use `git diff > <file-in-worktree>`
+  and `git apply` instead.
 ```
 
 ### Step 4 — Report results
