@@ -359,13 +359,16 @@ open issues first:
 `gh issue list --state open --search "\"review: advisory findings from #<N>\" in:title" --limit 5 --json number,title`.
 Confirm an exact title-prefix match: the returned issue title must begin with
 `review: advisory findings from #<N>`. A loose keyword match is not sufficient.
-If a confirmed match exists, write the non-duplicate findings to a comment
-body file first:
-`printf '%s' "<comment body>" > <run-dir>/comment-<N>.txt`
-then post:
+Write every body file with the `write_file` tool, or with a quoted heredoc
+redirected to the file (`cat > <run-dir>/issue-<N>.txt <<'EOF'`). Never place a
+markdown body inside double quotes in a shell command (for example
+`printf '%s' "<body>"` or `echo "<body>"`): the shell expands `$` and backticks
+in the body and silently corrupts the code spans.
+If a confirmed match exists, write the non-duplicate findings to
+`<run-dir>/comment-<N>.txt`, then post:
 `gh issue comment <existing> --body-file <run-dir>/comment-<N>.txt`
 and note `existing #<existing>` in the terminal summary. Otherwise write the
-draft body to `<run-dir>/issue-<N>.txt` first, then create:
+draft body to `<run-dir>/issue-<N>.txt`, then create:
 `gh issue create --title "..." --body-file <run-dir>/issue-<N>.txt`.
 Write all issue body drafts and comment body files to `<run-dir>/` so they
 are cleaned up with the rest of the run's scratch files.
