@@ -1,10 +1,10 @@
 ---
 name: tackle-issues
 description: "Tackle N open GitHub issues in parallel using worktree-isolated subagents, producing one PR per issue. Lightweight wrapper — PRs are proposals, not mutations; the safety net is /pr-triage on the next pass."
-argument-hint: "<N> [--label <label>] [--skip <glob>] [--issues <N,N,...>] [--repo <owner/repo>] [--draft]"
+argument-hint: "<N> [--label <label>] [--skip <glob>] [--issues <N,N,...>] [--repo <owner/repo>] [--draft] [--sort oldest|newest]"
 category: "Build & ship"
 when-to-use: "When you have open issues to burn down in parallel. Triggers on 'tackle issues', 'work on open issues', 'burn down issues', 'make PRs for issues'."
-flags: [--label, --skip, --issues, --repo, --draft]
+flags: [--label, --skip, --issues, --repo, --draft, --sort]
 ---
 
 # Tackle Issues
@@ -23,6 +23,7 @@ Parse from the input:
 | `--skip <glob>` | (none) | Skip issues whose title matches this pattern |
 | `--repo owner/repo` | (cwd git remote) | Target repository |
 | `--draft` | off | Create draft PRs instead of ready-for-review |
+| `--sort oldest\|newest` | newest | Issue selection order. `newest` (default) tackles recently opened issues first; `oldest` clears the backlog |
 
 ## Execution
 
@@ -37,7 +38,7 @@ This fetch also determines where isolated subagent worktrees start: the runtime 
 If `--issues` provided, fetch those issue records directly with `gh issue view <n> --json number,title,body,labels,assignees` for each. **Do not apply `--label`, `--skip`, or assignee filters to explicit `--issues`; those flags apply only to auto-discovered issues.** Otherwise:
 
 ```bash
-gh issue list --state open --limit <N * 2> --json number,title,body,labels,assignees
+gh issue list --state open --limit <N * 2> --sort created --order <asc if --sort oldest, desc otherwise> --json number,title,body,labels,assignees
 ```
 
 Filter out issues that (auto-discover only):

@@ -1,11 +1,11 @@
 ---
 name: pr-triage
 description: "Batch-review open PRs in parallel, triage into merge/fix/follow-up buckets, then execute each bucket with per-action human gates on every irreversible operation. Parallel reviews in worktrees compress wall-clock; sequential human-gated merges and diff-only fixes keep blast radius bounded."
-argument-hint: "[--prs <N,N,...>] [--limit <N>] [--repo <owner/repo>] [--auto-merge] [--skip-fix] [--prefilter | --no-prefilter]"
+argument-hint: "[--prs <N,N,...>] [--limit <N>] [--repo <owner/repo>] [--auto-merge] [--skip-fix] [--prefilter | --no-prefilter] [--sort oldest|newest]"
 category: "Build & ship"
 when-to-use: "When 2+ PRs are open and you want to review, triage, merge, and fix them in a single session. Triggers on 'triage PRs', 'review open PRs', 'batch review', 'clear the PR queue'."
 skills: [review, fix-pr, contract]
-flags: [--auto-merge, --skip-fix, --prs, --limit, --repo, --prefilter, --no-prefilter]
+flags: [--auto-merge, --skip-fix, --prs, --limit, --repo, --prefilter, --no-prefilter, --sort]
 failure_modes:
   - rate_limit_429_on_wide_fanout
   - jev_prefilter_unavailable_or_path_refused
@@ -51,6 +51,7 @@ Parse these from `$ARGUMENTS`:
 | `--skip-fix` | off | Skip Wave 3 fix phase; just triage and merge |
 | `--prefilter` | on for public repos | Force the Wave 0.5 Jev pre-filter on, including for private repos |
 | `--no-prefilter` | off | Skip Wave 0.5; every PR gets a full review |
+| `--sort oldest\|newest` | newest | PR selection order when using all-open discovery. `newest` (default) triages recently opened PRs first; `oldest` clears the backlog |
 
 ## Execution
 
@@ -69,7 +70,8 @@ Parse these from `$ARGUMENTS`:
    Run `mkdir -p <run-dir>` immediately.
 4. Fetch open PRs:
    - If `--prs` provided: `gh pr view <N> --json number,title,headRefName,headRefOid,url,author,reviewDecision,statusCheckRollup,isDraft` for each.
-   - Otherwise: `gh pr list --state open --limit <limit> --json number,title,headRefName,headRefOid,url,author,reviewDecision,statusCheckRollup,isDraft`.
+   - Otherwise: `gh pr list --state open --limit <limit> --json number,title,headRefName,headRefOid,url,author,reviewDecision,statusCheckRollup,isDraft,createdAt`.
+     When `--sort oldest`, sort the fetched list by `createdAt` ascending before proceeding. Default order (newest first) needs no re-sort.
    Record each PR's `headRefOid` as `fetched_sha` for later staleness checks.
 5. If 0 PRs found, report Done with "No open PRs to triage" and stop.
 6. Print the PR manifest table to the operator:
