@@ -267,8 +267,8 @@ Merge in the resulting order: clean PRs first, conflicting ones last. A PR that
 conflicts in simulation is still attempted last (its conflict may be with a PR
 the operator later declines), and goes to BLOCKED by step 1 if it really does
 conflict. Show the planned order and the simulated conflicts in the merge
-confirm. Requires git ≥ 2.38 (`merge-tree --write-tree`); on older git, skip
-this step. Delete the `refs/pr-sim/*` refs afterwards.
+confirm. Requires git ≥ 2.38 (`merge-tree --write-tree`), enforced by Wave 0
+preflight. Delete the `refs/pr-sim/*` refs afterwards.
 
 For each GREEN PR in that order, **sequentially** (never parallel):
 
