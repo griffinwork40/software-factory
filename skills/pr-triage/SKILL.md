@@ -7,14 +7,14 @@ when-to-use: "When 2+ PRs are open and you want to review, triage, merge, and fi
 skills: [review, fix-pr, contract]
 flags: [--auto-merge, --skip-fix, --prs, --limit, --repo, --prefilter, --no-prefilter, --sort]
 failure_modes:
-  - rate_limit_429_on_wide_fanout
-  - jev_prefilter_unavailable_or_path_refused
-  - merge_conflict_after_sibling_merge
-  - fix_agent_misreads_stale_comment
-  - gh_auth_missing
-  - concurrent_run_scratch_collision
-  - merge_of_unreviewed_head_sha
-  - duplicate_advisory_issues
+  - RATE_LIMIT_429: "Dispatching 5+ review agents in one wave triggers Anthropic 429 rate limits. Mitigation: cap at 5 concurrent; larger batches run in waves of 5."
+  - JEV_PREFILTER_UNAVAILABLE: "Jev MCP server unreachable, API key missing, or server refuses diff paths. Mitigation: fail open; every PR goes to the Full review route."
+  - MERGE_CONFLICT_AFTER_SIBLING: "Merging one GREEN PR makes a later sibling conflict with the updated base. Mitigation: conflict-minimizing merge order via merge-tree simulation; conflicting PRs move to BLOCKED for a fix-pr dispatch."
+  - FIX_AGENT_STALE_COMMENT: "/fix-pr harvests PR comments, but a stale comment from an earlier round may not reflect current state. Mitigation: land posts blocking findings with the reviewed SHA; /fix-pr probes re-verify each finding on HEAD."
+  - GH_AUTH_MISSING: "gh CLI is not authenticated. Mitigation: fail closed in Wave 0 before any work begins."
+  - SCRATCH_DIR_COLLISION: "Two concurrent pr-triage sessions share scratch paths and corrupt each other's state. Mitigation: per-run scratch directory with timestamp and random suffix."
+  - UNREVIEWED_HEAD_MERGE: "PR head moves after review but before merge, landing unreviewed commits. Mitigation: --match-head-commit on every merge; GitHub refuses if the head moved."
+  - DUPLICATE_ADVISORY_ISSUES: "Wave 2C creates advisory issues that duplicate existing open issues. Mitigation: exact title-prefix match search before creating; comment on existing issue instead."
 ---
 
 # PR Triage — decision-support orchestrator
@@ -60,6 +60,9 @@ Parse these from `$ARGUMENTS`:
 1. Verify `gh` CLI is authenticated: `gh auth status`. **Fail closed** if not.
    Verify `gh` version is 2.41 or later (`gh --version`); versions before 2.41
    lack `--match-head-commit` and will fail at merge time. **Fail closed** if not met.
+   Verify `git` version is 2.38 or later (`git --version`); versions before 2.38
+   lack `merge-tree --write-tree` used in Wave 2A merge-order simulation.
+   **Fail closed** if not met.
 2. Determine target repo from `--repo` flag or `gh repo view --json nameWithOwner`.
 3. Create the per-run scratch directory used by all later waves. Generate the name
    **once** with:
