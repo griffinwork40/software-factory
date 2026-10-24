@@ -164,9 +164,9 @@ After all agent calls complete (all waves if batched), collect each agent's fina
 | 203 | Remove unused import | #213 | ✅ | Removed 3 unused imports |
 | 207 | Add parser test | — | UNREPRODUCED | Couldn't reproduce edge case |
 | 209 | Document config options | — | OBSOLETE | Change already present on <head-sha> |
-| 210 | Migrate auth helper | — | STALE-BASE | Worktree at abc123, expected <head-sha> |
+| 210 | Migrate auth helper | — | STALE-BASE | base <head-sha> not ancestor of worktree <worktree-sha> |
 
-Status legend: ✅ PR opened | ❌ failed | UNREPRODUCED (no reproduction found) | OBSOLETE (already done or ask gone) | STALE-BASE (worktree SHA mismatch) | cosmetic (reported, not fixed)
+Status legend: ✅ PR opened | ❌ failed | UNREPRODUCED (no reproduction found) | OBSOLETE (already done or ask gone) | STALE-BASE (base SHA not an ancestor of worktree HEAD, or unresolvable) | cosmetic (reported, not fixed)
 
 <N>/<M> issues tackled. Run `/pr-triage` to review and merge.
 ```
