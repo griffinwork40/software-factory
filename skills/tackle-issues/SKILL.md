@@ -149,6 +149,9 @@ Do NOT:
 - Make architectural changes or large refactors
 - Combine multiple issues into one PR
 - Force push or modify other branches
+- Add entries to `.filesize-baseline.json`, `.funcsize-baseline.json`, or similar
+  audit baseline files. If a file exceeds its size ceiling, extract one whole
+  concern into a new sibling file instead of raising the baseline.
 ```
 
 ### Step 4 — Report results
