@@ -151,7 +151,9 @@ Do NOT:
 - Force push or modify other branches
 - Add entries to `.filesize-baseline.json`, `.funcsize-baseline.json`, or similar
   audit baseline files. If a file exceeds its size ceiling, extract one whole
-  concern into a new sibling file instead of raising the baseline.
+  concern into a new sibling file instead of raising the baseline. Update all
+  imports and run the project's lint command and relevant tests to confirm the
+  extracted file compiles before committing.
 ```
 
 ### Step 4 — Report results
