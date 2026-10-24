@@ -68,8 +68,11 @@ Parse these from `$ARGUMENTS`:
 2. Determine target repo from `--repo` flag or `gh repo view --json nameWithOwner`.
 2a. **Concurrent-run detection (warn-only).** Call `list_sessions` and scan the
     results for any other live session whose prompt or skill invocation references
-    `pr-triage` and the same target repo. If any such session is found, print a
-    prominent warning:
+    `pr-triage` and the same target repo. Match on the resolved `owner/repo`
+    string from step 2. Accept a match if the session text contains either the
+    full `owner/repo` or the repo shortname. A false positive is acceptable
+    (the warning is advisory). If any such session is found, print a prominent
+    warning:
 
     ```
     ⚠️  WARNING: another pr-triage session appears to be running against <repo>
@@ -78,7 +81,8 @@ Parse these from `$ARGUMENTS`:
     Continuing in 10 seconds — press Ctrl-C to abort.
     ```
 
-    Then pause 10 seconds (`sleep 10`) before continuing. **Do not block.**
+    Then call the `bash` tool with `sleep 10` to pause before continuing.
+    This is advisory — do not hard-gate on it.
     False positives are possible (e.g. a session that already finished but
     appears live); the warning is advisory, not a hard gate. If `list_sessions`
     is not available in the current tool surface, skip this step silently.
@@ -395,8 +399,14 @@ searches and skip creation if either finds a match:
    `review: advisory findings from #<N>`. A loose keyword match is not sufficient.
 
 2. **Recent-issue search** — issues created in the last hour (catches a concurrent
-   run that filed the same issue moments ago):
-   `gh issue list --state open --search "\"review: advisory findings from #<N>\" in:title created:>$(date -u -v-1H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u --date='1 hour ago' +%Y-%m-%dT%H:%M:%SZ)" --limit 5 --json number,title,createdAt`.
+   run that filed the same issue moments ago). First, compute the cutoff time in
+   a standalone bash call:
+   `date -u -v-1H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u --date='1 hour ago' +%Y-%m-%dT%H:%M:%SZ`
+   If the command outputs an empty string (e.g. on Alpine/busybox where neither
+   BSD nor GNU date flags are available), skip search 2 entirely rather than
+   issuing a malformed query. Otherwise, substitute the result into the search:
+   `gh issue list --state open --search "\"review: advisory findings from #<N>\" in:title created:><CUTOFF>" --limit 5 --json number,title,createdAt`
+   where `<CUTOFF>` is the literal datetime string from the previous command.
    If any issue is returned, treat it as a duplicate regardless of whether the
    `[triage:…]` tag matches — a concurrent run used a different run-id.
 
