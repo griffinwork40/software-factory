@@ -10,7 +10,8 @@ failure_modes:
   - RATE_LIMIT_429: "Dispatching 5+ review agents in one wave triggers Anthropic 429 rate limits. Mitigation: cap at 5 concurrent; larger batches run in waves of 5."
   - JEV_PREFILTER_UNAVAILABLE: "Jev MCP server unreachable, API key missing, or server refuses diff paths. Mitigation: fail open; every PR goes to the Full review route."
   - MERGE_CONFLICT_AFTER_SIBLING: "Merging one GREEN PR makes a later sibling conflict with the updated base. Mitigation: conflict-minimizing merge order via merge-tree simulation; conflicting PRs move to BLOCKED for a fix-pr dispatch."
-  - FIX_AGENT_STALE_COMMENT: "/fix-pr harvests PR comments, but a stale comment from an earlier round may not reflect current state. Mitigation: land posts blocking findings with the reviewed SHA; /fix-pr probes re-verify each finding on HEAD."
+  - FIX_AGENT_STALE_COMMENT: "/fix-pr harvests PR comments, but a stale comment from an earlier round may not reflect current state. Mitigation: pr-triage posts blocking findings with the reviewed SHA before dispatching /fix-pr; /fix-pr probes re-verify each finding on HEAD."
+  - REVIEW_FINDINGS_INVISIBLE_TO_FIX: "/review is read-only and never posts, so its findings exist only in the coordinator's context, while /fix-pr builds its fix spec from GitHub stores. Mitigation: Wave 2B posts the blocking set as a PR comment (gh pr comment --body-file) before dispatching /fix-pr, which /fix-pr's Phase 1 source 3 (issue-level comments) already harvests."
   - GH_AUTH_MISSING: "gh CLI is not authenticated. Mitigation: fail closed in Wave 0 before any work begins."
   - SCRATCH_DIR_COLLISION: "Two concurrent pr-triage sessions share scratch paths and corrupt each other's state. Mitigation: per-run scratch directory with timestamp and random suffix."
   - UNREVIEWED_HEAD_MERGE: "PR head moves after review but before merge, landing unreviewed commits. Mitigation: --match-head-commit on every merge; GitHub refuses if the head moved."
@@ -302,7 +303,25 @@ For each GREEN PR in that order, **sequentially** (never parallel):
 
 #### 2B — Fix Blocked PRs
 
-For each BLOCKED PR, dispatch `/fix-pr`:
+**Before dispatching `/fix-pr`, post the blocking findings as a PR comment.**
+`/review` is read-only and never posts to GitHub, so the blocking findings exist
+only in the coordinator's context. `/fix-pr` builds its fix spec from GitHub
+stores (inline review comments, issue-level comments, CI checks); without this
+post, fix agents fly blind on the actual blockers. This is the same pattern
+`/land` uses in Phase 1e.
+
+For each BLOCKED PR:
+
+1. Write the blocking findings to `<run-dir>/findings-<N>.md`. Use `write_file`
+   or a quoted heredoc — never inline `--body` or double-quoted shell strings.
+   The heading must be:
+   `pr-triage: <n> blocking findings @ <reviewed_sha7>`
+   followed by one numbered item per finding: severity, `file:line`, finding
+   sentence, suggestion. (`<reviewed_sha7>` is the first 7 chars of the
+   `headRefOid` captured in Wave 1.)
+2. Post the comment:
+   `gh pr comment <N> --body-file <run-dir>/findings-<N>.md`
+3. Then dispatch `/fix-pr`:
 
 - If only 1 blocked PR: dispatch a single `agent` call: `skill fix-pr <N>`
 - If 2+ blocked PRs: dispatch parallel `agent` calls, each calling `skill fix-pr <N>`.
