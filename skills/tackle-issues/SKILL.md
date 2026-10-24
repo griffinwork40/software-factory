@@ -6,7 +6,7 @@ category: "Build & ship"
 when-to-use: "When you have open issues to burn down in parallel. Triggers on 'tackle issues', 'work on open issues', 'burn down issues', 'make PRs for issues'."
 flags: [--label, --skip, --issues, --repo, --draft, --sort]
 failure_modes:
-  - STALE_BASE: "Subagent worktree starts at a SHA different from the fetched origin HEAD. Mitigation: subagent step 1 checks git rev-parse HEAD against the expected SHA and reports STALE-BASE."
+  - STALE_BASE: "Subagent worktree HEAD is not a descendant of the fetched origin HEAD (or the SHA is unresolvable). Mitigation: subagent step 1 runs git merge-base --is-ancestor and reports STALE-BASE on any non-zero exit."
   - ALREADY_DONE: "Issue already addressed by merged commits or PRs but remains open. Mitigation: step 1 verifies each candidate against HEAD via git log and gh pr list before dispatch."
   - DUPLICATE_PR: "An open PR already exists for the issue. Mitigation: step 1 checks closingIssuesReferences and searches open PRs by issue number."
   - WRONG_CHECKOUT: "--repo names a different repository than the cwd checkout, so worktrees branch from the wrong repo. Mitigation: none yet (tracked in #3)."
@@ -99,7 +99,7 @@ Dispatch one `agent` tool call per issue. Issue all calls for the current wave i
 - `agent_type: "general-purpose"`
 - `isolation: "worktree"` — each agent gets its own worktree; dirty/ahead worktrees are preserved and locked by the runtime; clean ones are torn down automatically
 - `model: "claude-sonnet-4-6"`
-- Cap at **5 concurrent**. If there are more than 5 issues, batch them into waves of 5: dispatch wave 1 (5 calls in one reply), wait for all 5 to complete, then dispatch wave 2, and so on.
+- Cap at **5 concurrent**. If there are more than 5 issues, batch them into waves of 5: dispatch wave 1 (5 calls in one reply), wait for all 5 to complete, then before dispatching each subsequent wave re-check that remaining candidate issues are still unclaimed (no new open PRs referencing them since the last wave — repeat the `gh pr list --state open --search "#<N> in:title,body"` check from Step 1 for each pending candidate), then dispatch the next wave.
 
 Each agent's prompt:
 
@@ -112,7 +112,7 @@ You are fixing GitHub issue #<number> in <repo>.
 <body>
 
 Instructions:
-1. Run `git rev-parse HEAD` and confirm it equals <head-sha>. If it does not, stop without editing any file and report **STALE-BASE** with both SHAs. Otherwise, before any edit, verify the issue comments and open referencing PRs have not made the remaining ask obsolete; if obsolete, report **OBSOLETE** and stop.
+1. Run `git rev-parse HEAD` and record it as `<worktree-sha>`. Verify the base is reachable: `git merge-base --is-ancestor <head-sha> HEAD`. If the exit code is non-zero (exit 1 means not an ancestor; exit 128 means the SHA is unresolvable — either way, stop without editing any file and report **STALE-BASE** with `<worktree-sha>` and `<head-sha>`). Otherwise, before any edit, verify the issue comments and open referencing PRs have not made the remaining ask obsolete; if obsolete, report **OBSOLETE** and stop.
 2. For a **BUG**, establish on current HEAD either a failing reproduction (test or command) or a concrete source-level demonstration (file:line of the defective code path and why it is reachable). If neither is possible, do not fix it; report **UNREPRODUCED** and what you checked.
 3. For a **PREVENTIVE/refactor/hygiene** issue, show evidence of the current risk on HEAD (for example, the hand-rolled site still exists at file:line, the gate fails, or the size remains over its ceiling). Cosmetic findings with no current risk are reported, not fixed.
 4. For any **other issue type** (feature, test-gap, docs, or anything not covered above), confirm on HEAD that the requested change is not already present: cite the relevant file:line or paste the grep output showing absence. If already present, report **OBSOLETE** and stop.
@@ -167,9 +167,9 @@ After all agent calls complete (all waves if batched), collect each agent's fina
 | 203 | Remove unused import | #213 | ✅ | Removed 3 unused imports |
 | 207 | Add parser test | — | UNREPRODUCED | Couldn't reproduce edge case |
 | 209 | Document config options | — | OBSOLETE | Change already present on <head-sha> |
-| 210 | Migrate auth helper | — | STALE-BASE | Worktree at abc123, expected <head-sha> |
+| 210 | Migrate auth helper | — | STALE-BASE | base <head-sha> not ancestor of worktree <worktree-sha> |
 
-Status legend: ✅ PR opened | ❌ failed | UNREPRODUCED (no reproduction found) | OBSOLETE (already done or ask gone) | STALE-BASE (worktree SHA mismatch) | cosmetic (reported, not fixed)
+Status legend: ✅ PR opened | ❌ failed | UNREPRODUCED (no reproduction found) | OBSOLETE (already done or ask gone) | STALE-BASE (base SHA not an ancestor of worktree HEAD, or unresolvable) | cosmetic (reported, not fixed)
 
 <N>/<M> issues tackled. Run `/pr-triage` to review and merge.
 ```
