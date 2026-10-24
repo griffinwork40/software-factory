@@ -14,7 +14,9 @@ failure_modes:
   - GH_AUTH_MISSING: "gh CLI is not authenticated. Mitigation: fail closed in Wave 0 before any work begins."
   - SCRATCH_DIR_COLLISION: "Two concurrent pr-triage sessions share scratch paths and corrupt each other's state. Mitigation: per-run scratch directory with timestamp and random suffix."
   - UNREVIEWED_HEAD_MERGE: "PR head moves after review but before merge, landing unreviewed commits. Mitigation: --match-head-commit on every merge; GitHub refuses if the head moved."
-  - DUPLICATE_ADVISORY_ISSUES: "Wave 2C creates advisory issues that duplicate existing open issues. Mitigation: exact title-prefix match search before creating; comment on existing issue instead."
+  - DUPLICATE_ADVISORY_ISSUES: "Wave 2C creates advisory issues that duplicate existing open issues. Mitigation: session-unique tag in title; exact title-prefix match search; recent-issue search (last hour) before creating; comment on existing issue instead."
+  - CONCURRENT_RUN_MERGE_RACE: "Two parallel pr-triage runs on the same repo can both pass the pre-merge state check before either completes gh pr merge. Mitigation: Wave 0 warns when a sibling pr-triage session is detected via list_sessions; --match-head-commit is the last-resort hard guard (GitHub rejects the second merge if the head moved). The TOCTOU window between the final state check and the merge call is accepted as irreducible without repo-side locking."
+  - CONCURRENT_RUN_ISSUE_DEDUP_RACE: "Two parallel runs can both search for an existing issue, find nothing, and both create the same follow-up issue. Mitigation: session-unique tag in the issue title makes each run's issues distinct; recent-issue search (last hour) before filing catches a sibling's just-created issue."
 ---
 
 # PR Triage — decision-support orchestrator
@@ -64,6 +66,22 @@ Parse these from `$ARGUMENTS`:
    lack `merge-tree --write-tree` used in Wave 2A merge-order simulation.
    **Fail closed** if not met.
 2. Determine target repo from `--repo` flag or `gh repo view --json nameWithOwner`.
+2a. **Concurrent-run detection (warn-only).** Call `list_sessions` and scan the
+    results for any other live session whose prompt or skill invocation references
+    `pr-triage` and the same target repo. If any such session is found, print a
+    prominent warning:
+
+    ```
+    ⚠️  WARNING: another pr-triage session appears to be running against <repo>
+    (session <id>). Concurrent runs can race on merges and issue filing.
+    Recommended: cancel one session before proceeding.
+    Continuing in 10 seconds — press Ctrl-C to abort.
+    ```
+
+    Then pause 10 seconds (`sleep 10`) before continuing. **Do not block.**
+    False positives are possible (e.g. a session that already finished but
+    appears live); the warning is advisory, not a hard gate. If `list_sessions`
+    is not available in the current tool surface, skip this step silently.
 3. Create the per-run scratch directory used by all later waves. Generate the name
    **once** with:
    `echo ".afk/tmp/pr-triage-$(date +%Y%m%d-%H%M%S)-$(openssl rand -hex 3)"`
@@ -292,9 +310,14 @@ For each GREEN PR in that order, **sequentially** (never parallel):
    individually, since they were reviewed on a cheaper model.
 3. Merge: `gh pr merge <N> --merge --delete-branch --match-head-commit <fetched_sha>`
    (Use `--merge` not `--squash` unless the PR is single-commit; respect repo's
-   merge strategy if detectable from `gh api repos/{owner}/{repo}` settings.
-   `--match-head-commit` ensures GitHub refuses the merge if the head moved
-   after the review.)
+   merge strategy if detectable from `gh api repos/{owner}/{repo}` settings.)
+   **`--match-head-commit` is the last-resort guard against merge races.** If a
+   concurrent pr-triage run (or any other actor) merges this PR or pushes new
+   commits between step 1's state check and this merge call, GitHub will reject
+   the merge because the head SHA no longer matches `<fetched_sha>`. This
+   eliminates the risk of landing an unreviewed commit. The TOCTOU window between
+   step 1 and this call is accepted as irreducible without repo-side locking;
+   `--match-head-commit` is the hard backstop that makes it safe.
 4. **After each merge**, verify the base branch CI:
    - `gh pr checks` on the next candidate (if any) — if the base branch now
      shows failures, **stop merging** and inform the operator.
@@ -337,7 +360,11 @@ will otherwise be lost in the triage session transcript.
 **Skip when:** a GREEN PR's review had zero non-blocking findings (truly clean).
 
 For each GREEN PR with non-blocking findings, draft a GitHub issue:
-- **Title:** `review: advisory findings from #<N> — <PR title summary>`
+- **Title:** `review: advisory findings from #<N> — <PR title summary> [triage:<run-id>]`
+  where `<run-id>` is the unique suffix of the run dir recorded in Wave 0 step 3
+  (e.g. `20240101-120000-a1b2c3`). This tag makes each run's issues distinct and
+  allows a concurrent run's just-created issue to be found by the recent-issue
+  search below.
 - **Body:** the non-blocking findings list (severity, file/line, description,
   suggestion), the merged PR link, and a note that these were reviewed and
   accepted at merge time.
@@ -349,21 +376,30 @@ Batch-present all drafted issues to the operator for approval:
 ## Advisory Follow-ups from Merged PRs
 
 ### Issue for PR #101 — Fix auth timeout
-**Title:** review: advisory findings from #101 — fix auth timeout
+**Title:** review: advisory findings from #101 — fix auth timeout [triage:20240101-120000-a1b2c3]
 **Findings:** 2 low (missing null check in fallback path, stale comment)
 
 ### Issue for PR #103 — Bump deps
-**Title:** review: advisory findings from #103 — bump deps
+**Title:** review: advisory findings from #103 — bump deps [triage:20240101-120000-a1b2c3]
 **Findings:** 1 nit (changelog entry formatting)
 
 Create these issues? (y/n/edit/skip)
 ```
 
-On approval, **deduplicate before creating.** For each drafted issue, search
-open issues first:
-`gh issue list --state open --search "\"review: advisory findings from #<N>\" in:title" --limit 5 --json number,title`.
-Confirm an exact title-prefix match: the returned issue title must begin with
-`review: advisory findings from #<N>`. A loose keyword match is not sufficient.
+On approval, **deduplicate before creating.** For each drafted issue, run two
+searches and skip creation if either finds a match:
+
+1. **Exact-title search** — open issues with this PR's base prefix:
+   `gh issue list --state open --search "\"review: advisory findings from #<N>\" in:title" --limit 5 --json number,title,createdAt`.
+   Confirm an exact title-prefix match: the returned issue title must begin with
+   `review: advisory findings from #<N>`. A loose keyword match is not sufficient.
+
+2. **Recent-issue search** — issues created in the last hour (catches a concurrent
+   run that filed the same issue moments ago):
+   `gh issue list --state open --search "\"review: advisory findings from #<N>\" in:title created:>$(date -u -v-1H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u --date='1 hour ago' +%Y-%m-%dT%H:%M:%SZ)" --limit 5 --json number,title,createdAt`.
+   If any issue is returned, treat it as a duplicate regardless of whether the
+   `[triage:…]` tag matches — a concurrent run used a different run-id.
+
 Write every body file with the `write_file` tool, or with a quoted heredoc
 redirected to the file (`cat > <run-dir>/issue-<N>.txt <<'EOF'`). Never place a
 markdown body inside double quotes in a shell command (for example
