@@ -15,7 +15,7 @@ failure_modes:
   - GH_AUTH_MISSING: "gh CLI is not authenticated. Mitigation: fail closed in Wave 0 before any work begins."
   - SCRATCH_DIR_COLLISION: "Two concurrent pr-triage sessions share scratch paths and corrupt each other's state. Mitigation: per-run scratch directory with timestamp and random suffix."
   - UNREVIEWED_HEAD_MERGE: "PR head moves after review but before merge, landing unreviewed commits. Mitigation: --match-head-commit on every merge; GitHub refuses if the head moved."
-  - DUPLICATE_ADVISORY_ISSUES: "Wave 2C creates advisory issues that duplicate existing open issues. Mitigation: session-unique tag in title; exact title-prefix match search; recent-issue search (last hour) before creating; comment on existing issue instead."
+  - DUPLICATE_ADVISORY_ISSUES: "Wave 2C creates advisory issues that duplicate existing open issues. Mitigation: session-unique tag in title; exact title-prefix match search; recent-issue search (last hour) before creating; comment on existing issue instead, or skip creation."
   - CONCURRENT_RUN_MERGE_RACE: "Two parallel pr-triage runs on the same repo can both pass the pre-merge state check before either completes gh pr merge. Mitigation: Wave 0 warns when a sibling pr-triage session is detected via list_sessions; --match-head-commit is the last-resort hard guard (GitHub rejects the second merge if the head moved). The TOCTOU window between the final state check and the merge call is accepted as irreducible without repo-side locking."
   - CONCURRENT_RUN_ISSUE_DEDUP_RACE: "Two parallel runs can both search for an existing issue, find nothing, and both create the same follow-up issue. Mitigation: session-unique tag in the issue title makes each run's issues distinct; recent-issue search (last hour) before filing catches a sibling's just-created issue."
 ---
@@ -69,9 +69,12 @@ Parse these from `$ARGUMENTS`:
 2. Determine target repo from `--repo` flag or `gh repo view --json nameWithOwner`.
 2a. **Concurrent-run detection (warn-only).** Call `list_sessions` and scan the
     results for any other live session whose prompt or skill invocation references
-    `pr-triage` and the same target repo. Match on the resolved `owner/repo`
-    string from step 2. Accept a match if the session text contains either the
-    full `owner/repo` or the repo shortname. A false positive is acceptable
+    the skill name `pr-triage`. A session matches if its text contains the literal
+    string `pr-triage`; repo matching is not required (repo context is often
+    absent mid-session). **Note:** this detection window is narrow — sessions may
+    start or finish between the `list_sessions` call and the merge attempt, so
+    false negatives are possible. `--match-head-commit` (Wave 2A step 3) is the
+    hard backstop for any miss. A false positive is acceptable
     (the warning is advisory). If any such session is found, print a prominent
     warning:
 
@@ -385,9 +388,11 @@ will otherwise be lost in the triage session transcript.
 For each GREEN PR with non-blocking findings, draft a GitHub issue:
 - **Title:** `review: advisory findings from #<N> — <PR title summary> [triage:<run-id>]`
   where `<run-id>` is the unique suffix of the run dir recorded in Wave 0 step 3
-  (e.g. `20240101-120000-a1b2c3`). This tag makes each run's issues distinct and
-  allows a concurrent run's just-created issue to be found by the recent-issue
-  search below.
+  (e.g. `20240101-120000-a1b2c3`). Within a single run, sequential filing order
+  is the dedup mechanism — each issue is filed one at a time, so a duplicate can
+  be detected before the next is created. The `[triage:<run-id>]` tag guards
+  against cross-run collisions: it makes each run's issues distinct and allows a
+  concurrent run's just-created issue to be found by the recent-issue search below.
 - **Body:** the non-blocking findings list (severity, file/line, description,
   suggestion), the merged PR link, and a note that these were reviewed and
   accepted at merge time.
