@@ -5,6 +5,11 @@ argument-hint: "<N> [--label <label>] [--skip <glob>] [--issues <N,N,...>] [--re
 category: "Build & ship"
 when-to-use: "When you have open issues to burn down in parallel. Triggers on 'tackle issues', 'work on open issues', 'burn down issues', 'make PRs for issues'."
 flags: [--label, --skip, --issues, --repo, --draft, --sort]
+failure_modes:
+  - STALE_BASE: "Subagent worktree starts at a SHA different from the fetched origin HEAD. Mitigation: subagent step 1 checks git rev-parse HEAD against the expected SHA and reports STALE-BASE."
+  - ALREADY_DONE: "Issue already addressed by merged commits or PRs but remains open. Mitigation: step 1 verifies each candidate against HEAD via git log and gh pr list before dispatch."
+  - DUPLICATE_PR: "An open PR already exists for the issue. Mitigation: step 1 checks closingIssuesReferences and searches open PRs by issue number."
+  - WRONG_CHECKOUT: "--repo names a different repository than the cwd checkout, so worktrees branch from the wrong repo. Mitigation: none yet (tracked in #3)."
 ---
 
 # Tackle Issues
@@ -51,7 +56,7 @@ Before selecting issues to dispatch, verify **every candidate** (including expli
 
 1. Check open referencing PRs and issue comments (as above).
 2. Run `git log origin/<default-branch> --oneline -E --grep "#<N>([^0-9]|$)"` to find commits that reference the issue (the `([^0-9]|$)` suffix prevents `#20` from matching `#200`; do not use `\b`, which POSIX ERE does not support, so git silently matches nothing; any match still warrants inspection).
-3. Run `gh pr list --state merged --search "#<N>"` to find merged PRs that mention the issue (scan titles and bodies for an exact `#<N>` reference before concluding the issue is addressed).
+3. Run `gh pr list --state merged --search "#<N>" --json number,title,body,closingIssuesReferences` to find merged PRs that mention the issue. Prefer `closingIssuesReferences` for an authoritative match; fall back to scanning titles and bodies for an exact `#<N>` reference (GitHub full-text search tokenizes `#20` loosely, so a keyword hit alone is not conclusive).
 
 If any merged commits or merged PRs exist for a candidate, inspect the issue's remaining acceptance items against HEAD. If nothing remains unaddressed, skip and report as **already-done**. If partial work was merged but items remain, note the remaining items and include the candidate (the subagent will address only what is left).
 
@@ -107,7 +112,7 @@ You are fixing GitHub issue #<number> in <repo>.
 <body>
 
 Instructions:
-1. Run `git rev-parse HEAD` and confirm it equals <head-sha>. If it does not, stop without editing any file and report **STALE-BASE** with both SHAs. Then verify the issue comments and open referencing PRs have not made the remaining ask obsolete; if obsolete, report **OBSOLETE** and stop.
+1. Run `git rev-parse HEAD` and confirm it equals <head-sha>. If it does not, stop without editing any file and report **STALE-BASE** with both SHAs. Otherwise, before any edit, verify the issue comments and open referencing PRs have not made the remaining ask obsolete; if obsolete, report **OBSOLETE** and stop.
 2. For a **BUG**, establish on current HEAD either a failing reproduction (test or command) or a concrete source-level demonstration (file:line of the defective code path and why it is reachable). If neither is possible, do not fix it; report **UNREPRODUCED** and what you checked.
 3. For a **PREVENTIVE/refactor/hygiene** issue, show evidence of the current risk on HEAD (for example, the hand-rolled site still exists at file:line, the gate fails, or the size remains over its ceiling). Cosmetic findings with no current risk are reported, not fixed.
 4. For any **other issue type** (feature, test-gap, docs, or anything not covered above), confirm on HEAD that the requested change is not already present: cite the relevant file:line or paste the grep output showing absence. If already present, report **OBSOLETE** and stop.
