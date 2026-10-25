@@ -5,6 +5,7 @@ argument-hint: "<N> [--label <label>] [--skip <glob>] [--issues <N,N,...>] [--re
 category: "Build & ship"
 when-to-use: "When you have open issues to burn down in parallel. Triggers on 'tackle issues', 'work on open issues', 'burn down issues', 'make PRs for issues'."
 flags: [--label, --skip, --issues, --repo, --draft, --sort]
+max_tool_use_iterations: 100
 failure_modes:
   - STALE_BASE: "Subagent worktree HEAD is not a descendant of the fetched origin HEAD (or the SHA is unresolvable). Mitigation: subagent step 1 runs git merge-base --is-ancestor and reports STALE-BASE on any non-zero exit."
   - ALREADY_DONE: "Issue already addressed by merged commits or PRs but remains open. Mitigation: step 1 verifies each candidate against HEAD via git log and gh pr list before dispatch."
