@@ -239,6 +239,7 @@ Present the triage table to the operator:
 
 ### Proposed actions:
 - **Merge:** #101, #103 (sequential, CI-gated)
+- **Comment:** Post blocking findings to each BLOCKED PR before fix dispatch
 - **Fix:** #102, #104 (dispatch /fix-pr, push after test gate)
 - **Issue (advisory):** #101 has 2 low findings, #103 has 1 nit — track after merge
 
@@ -340,7 +341,7 @@ post, fix agents fly blind on the actual blockers. This is the same pattern
 
 For each BLOCKED PR:
 
-1. Write the blocking findings to `<run-dir>/findings-<N>.md`. Use `write_file`
+1. Write the blocking findings from the Wave 1 review result to `<run-dir>/findings-<N>.md`. Use `write_file`
    or a quoted heredoc — never inline `--body` or double-quoted shell strings.
    The heading must be:
    `pr-triage: <n> blocking findings @ <reviewed_sha7>`
@@ -350,6 +351,8 @@ For each BLOCKED PR:
 2. Post the comment:
    `gh pr comment <N> --body-file <run-dir>/findings-<N>.md`
 3. Then dispatch `/fix-pr`:
+
+**Note:** For 3+ blocked PRs, posting comments sequentially before any fix dispatch adds N × round-trip latency. At typical scale (≤5 PRs) this is acceptable; for larger batches, post all comments first as a group before dispatching any fix agents.
 
 - If only 1 blocked PR: dispatch a single `agent` call: `skill fix-pr <N>`
 - If 2+ blocked PRs: dispatch parallel `agent` calls, each calling `skill fix-pr <N>`.
