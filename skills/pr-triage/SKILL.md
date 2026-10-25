@@ -80,9 +80,9 @@ Parse these from `$ARGUMENTS`:
     warning:
 
     ```
-    ⚠️  WARNING: another pr-triage session appears to be running against <repo>
-    (session <id>). Concurrent runs can race on merges and issue filing.
-    Recommended: cancel one session before proceeding.
+    ⚠️  WARNING: another pr-triage session appears to be running (session <id>);
+    it may be targeting this repo (<repo>). Concurrent runs can race on merges
+    and issue filing. Recommended: cancel one session before proceeding.
     Continuing in 10 seconds — press Ctrl-C to abort.
     ```
 
@@ -395,8 +395,7 @@ For each GREEN PR with non-blocking findings, draft a GitHub issue:
   (e.g. `20240101-120000-a1b2c3`). Within a single run, sequential filing order
   is the dedup mechanism — each issue is filed one at a time, so a duplicate can
   be detected before the next is created. The `[triage:<run-id>]` tag guards
-  against cross-run collisions: it makes each run's issues distinct and allows a
-  concurrent run's just-created issue to be found by the recent-issue search below.
+  against cross-run collisions: it makes each run's issues distinct.
 - **Body:** the non-blocking findings list (severity, file/line, description,
   suggestion), the merged PR link, and a note that these were reviewed and
   accepted at merge time.
