@@ -355,7 +355,7 @@ For each BLOCKED PR:
    `gh pr comment <N> --body-file <run-dir>/findings-<N>.md`
 3. Then dispatch `/fix-pr`:
 
-**Note:** For 3+ blocked PRs, posting comments sequentially before any fix dispatch adds N × round-trip latency. At typical scale (≤5 PRs) this is acceptable; for larger batches, post all comments first as a group before dispatching any fix agents.
+**Note:** For 3+ blocked PRs, posting comments sequentially before any fix dispatch adds N × round-trip latency. At typical scale (≤5 PRs) this is acceptable; for larger batches, post all comments first as a group before dispatching any fix agents. **For batches above 5, complete step 2 for all PRs before beginning any step 3 dispatches** — this overrides the per-PR loop ordering above.
 
 - If only 1 blocked PR: dispatch a single `agent` call: `skill fix-pr <N>`
 - If 2+ blocked PRs: dispatch parallel `agent` calls, each calling `skill fix-pr <N>`.
