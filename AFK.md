@@ -43,7 +43,7 @@ History: both skills were imported with full history from the standalone repos `
 
 ## Conventions
 
-**SKILL.md frontmatter** (YAML, required keys): `name`, `description`, `argument-hint`, `category`, `when-to-use`, `flags`. Optional: `skills` (sibling skill deps), `failure_modes`, `max_tool_use_iterations`. Any new flag must appear in `argument-hint`, `flags`, the Arguments table, and README usage.
+**SKILL.md frontmatter** (YAML, required keys): `name`, `description`, `argument-hint`, `category`, `when-to-use`, `flags`. Optional: `skills` (sibling skill deps), `failure_modes`, `max_tool_use_iterations`, `context` (execution context, e.g. `load`). Any new flag must appear in `argument-hint`, `flags`, the Arguments table, and README usage.
 
 **SKILL.md body** follows a fixed shape: H1 title, `## Hard constraints` (where gates exist), `## Arguments` table (Flag | Default | Meaning), `## Execution` with numbered `### Wave N` or `### Step N` sections, fenced templates for operator-facing output, and an explicit terminal-state section.
 
