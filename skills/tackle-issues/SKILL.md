@@ -100,7 +100,7 @@ Dispatch one `agent` tool call per issue. Issue all calls for the current wave i
 - `agent_type: "general-purpose"`
 - `isolation: "worktree"` — each agent gets its own worktree; dirty/ahead worktrees are preserved and locked by the runtime; clean ones are torn down automatically
 - `model: "claude-sonnet-4-6"`
-- Cap at **5 concurrent**. If there are more than 5 issues, batch them into waves of 5: dispatch wave 1 (5 calls in one reply), wait for all 5 to complete, then before dispatching each subsequent wave re-check that remaining candidate issues are still unclaimed (no new open PRs referencing them since the last wave — repeat the `gh pr list --state open --search "#<N> in:title,body"` check from Step 1 for each pending candidate), then dispatch the next wave.
+- Cap at **5 concurrent**. If there are more than 5 issues, batch them into waves of 5: dispatch wave 1 (5 calls in one reply), wait for all 5 to complete, then before dispatching each subsequent wave re-check that remaining candidate issues are still unclaimed (no new open PRs referencing them since the last wave). For each pending candidate run both checks from Step 1: `gh pr list --state open --search "#<N> in:title,body"` **and** `gh issue view <N> --json closingIssuesReferences` (to catch PRs linked via GitHub's auto-close UI that won't appear in a title/body search). If `gh` exits non-zero during either recheck call, log the issue number as **UNCHECKED** and proceed rather than silently skipping it. Then dispatch the next wave.
 
 Each agent's prompt:
 
