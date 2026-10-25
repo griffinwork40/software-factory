@@ -155,7 +155,7 @@ Do NOT:
   concern into a new sibling file instead of raising the baseline. Update all
   imports in every file that referenced the extracted symbols, then run
   `pnpm lint` (or the project's lint command) and relevant tests to confirm no
-  references are broken before committing.
+  import or runtime references are broken before committing.
 ```
 
 ### Step 4 — Report results
