@@ -394,8 +394,9 @@ For each GREEN PR with non-blocking findings, draft a GitHub issue:
   where `<run-id>` is the unique suffix of the run dir recorded in Wave 0 step 3
   (e.g. `20240101-120000-a1b2c3`). Within a single run, sequential filing order
   is the dedup mechanism — each issue is filed one at a time, so a duplicate can
-  be detected before the next is created. The `[triage:<run-id>]` tag guards
-  against cross-run collisions: it makes each run's issues distinct.
+  be detected before the next is created. The `[triage:<run-id>]` tag makes each
+  run's issue titles distinct; the recent-issue search below catches
+  concurrent-run duplicates regardless of the tag.
 - **Body:** the non-blocking findings list (severity, file/line, description,
   suggestion), the merged PR link, and a note that these were reviewed and
   accepted at merge time.
