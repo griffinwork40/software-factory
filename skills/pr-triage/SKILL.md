@@ -1,11 +1,11 @@
 ---
 name: pr-triage
 description: "Batch-review open PRs in parallel, triage into merge/fix/follow-up buckets, then execute each bucket with per-action human gates on every irreversible operation. Parallel reviews in worktrees compress wall-clock; sequential human-gated merges and diff-only fixes keep blast radius bounded."
-argument-hint: "[--prs <N,N,...>] [--limit <N>] [--repo <owner/repo>] [--auto-merge] [--skip-fix] [--prefilter | --no-prefilter] [--sort oldest|newest]"
+argument-hint: "[--prs <N,N,...>] [--limit <N>] [--repo <owner/repo>] [--auto-merge] [--skip-fix] [--prefilter | --no-prefilter] [--sort oldest|newest] [--release]"
 category: "Build & ship"
 when-to-use: "When 2+ PRs are open and you want to review, triage, merge, and fix them in a single session. Triggers on 'triage PRs', 'review open PRs', 'batch review', 'clear the PR queue'."
 skills: [review, fix-pr, contract]
-flags: [--auto-merge, --skip-fix, --prs, --limit, --repo, --prefilter, --no-prefilter, --sort]
+flags: [--auto-merge, --skip-fix, --prs, --limit, --repo, --prefilter, --no-prefilter, --sort, --release]
 max_tool_use_iterations: 100
 failure_modes:
   - RATE_LIMIT_429: "Dispatching 5+ review agents in one wave triggers Anthropic 429 rate limits. Mitigation: cap at 5 concurrent; larger batches run in waves of 5."
@@ -56,6 +56,7 @@ Parse these from `$ARGUMENTS`:
 | `--prefilter` | on for public repos | Force the Wave 0.5 Jev pre-filter on, including for private repos |
 | `--no-prefilter` | off | Skip Wave 0.5; every PR gets a full review |
 | `--sort oldest\|newest` | newest | PR selection order when using all-open discovery. `newest` (default) triages recently opened PRs first; `oldest` clears the backlog |
+| `--release` | off | After all merges complete, draft release notes from PRs merged this session and offer to create a GitHub release. The operator provides the tag at the approval gate; `--auto-merge` does not bypass this gate. |
 
 ## Execution
 
@@ -463,6 +464,49 @@ If any fixes were pushed in Wave 2B AND `--skip-fix` is not set:
 2. If the re-review returns GREEN, inform operator and offer to merge.
 3. If still BLOCKED, report findings and stop — do not loop.
 
+### Wave 4 — Release (conditional, `--release` only)
+
+If `--release` is set and at least one PR was merged in this session (Wave 2A or
+Wave 3):
+
+1. Collect all PRs merged this session: number, title, and author.
+2. Fetch the latest existing version tag:
+   `git tag --sort=-v:refname --list 'v*' | head -1`
+   If no `v*` tags exist, note "(no prior version tag)".
+3. Draft release notes to `<run-dir>/release-notes.md` using `write_file`:
+   - Heading: `## What's Changed`
+   - One bullet per merged PR: `- <title> (#<N>) @<author>`
+   - If a prior tag exists, footer:
+     `**Full Changelog**: https://github.com/<repo>/compare/<prior-tag>...HEAD`
+4. Preview to the operator:
+
+   ```
+   ## Release Preview
+
+   Latest tag: <prior-tag> (or "none")
+   Merged this session: #101, #103, #112
+
+   ### Draft release notes:
+   <contents of release-notes.md>
+
+   Enter the tag for this release (e.g. v1.5.0), or "skip":
+   ```
+
+5. Prompt the operator for the tag via `ask_question` (type: text). If the
+   operator replies "skip", the question is declined, or the surface is
+   non-interactive, skip release creation and note "release: skipped" in the
+   terminal summary. **This gate is mandatory** — `--auto-merge` does not
+   bypass it because tags are permanent and visible to downstream consumers.
+6. Verify the tag does not already exist: `git tag -l <tag>`. If it exists,
+   inform the operator and re-prompt once. On second collision, skip with
+   "release: tag exists".
+7. Create the release:
+   `gh release create <tag> --title "<tag>" --notes-file <run-dir>/release-notes.md --target <default-branch>`
+8. Record in the terminal summary: `Release: <tag> (<release-url>)`.
+
+If `--release` is set but no PRs were merged, note "release: skipped (no merges)"
+in the terminal summary.
+
 ### Terminal State
 
 Report Done with a structured summary:
@@ -478,6 +522,7 @@ Report Done with a structured summary:
 | Skipped | — | — |
 | Deferred (pre-filter) | #108 | Not reviewed |
 | Still blocked | #107 | Needs upstream API change |
+| Release | — | <tag> (<url>) / skipped / not requested |
 
 Session closed <N> of <M> PRs. Pre-filter: <on: X light, Y deferred | off: reason>.
 ```

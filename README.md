@@ -25,11 +25,13 @@ afk plugin install griffinwork40/software-factory
 /tackle-issues 5 --label bug             # Only issues labelled "bug"
 /tackle-issues --issues 101,104 --draft  # Specific issues, open as draft PRs
 /tackle-issues 5 --sort oldest            # Clear the backlog, oldest issues first
+/tackle-issues 5 --screen                # Skip underspecified issues
 
 /pr-triage                               # Review and triage all open PRs (up to 10)
 /pr-triage --prs 101,102,105             # Triage specific PRs
 /pr-triage --skip-fix                    # Triage and merge only
 /pr-triage --sort oldest                 # Oldest PRs first
+/pr-triage --release                     # Triage, merge, then draft a GitHub release
 
 /land 101                                # Review, fix, re-review, merge, file follow-ups
 /land 101 --no-merge                     # Converge, then stop at READY
