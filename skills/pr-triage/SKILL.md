@@ -471,9 +471,9 @@ Wave 3; `--skip-fix` suppresses Wave 3 but not Wave 4, so Wave 2A merges alone
 satisfy this condition):
 
 1. Collect all PRs merged this session: number, title, and author.
-2. Fetch the latest existing version tag:
-   `git tag --sort=-v:refname --list 'v*' | head -1`
-   If no `v*` tags exist, note "(no prior version tag)".
+2. Fetch the latest existing version tag from GitHub:
+   `gh release list --repo <repo> --limit 1 --json tagName -q '.[0].tagName'`
+   If no releases exist, note "(no prior version tag)".
    Record `<default-branch>` via
    `gh repo view --json defaultBranchRef -q .defaultBranchRef.name`.
 3. Draft release notes to `<run-dir>/release-notes.md` using `write_file`:
@@ -503,14 +503,17 @@ satisfy this condition):
    non-interactive, skip release creation and note "release: skipped" in the
    terminal summary. **This gate is mandatory** — `--auto-merge` does not
    bypass it because tags are permanent and visible to downstream consumers.
-6. Verify the tag does not already exist on GitHub:
-   `gh release view <tag> --repo <repo> 2>/dev/null && echo EXISTS`.
-   If the command exits 0 (release found), inform the operator and re-prompt
-   once. On second collision, skip with "release: tag exists".
-   (Using `gh release view` queries GitHub directly rather than the local clone,
-   catching tags pushed by CI or collaborators since the last fetch.)
+6. Verify the tag does not already exist on GitHub (as a release OR a bare
+   git tag):
+   `gh api repos/{owner}/{repo}/git/refs/tags/<tag> --silent; TAG_STATUS=$?`
+   If `TAG_STATUS` is 0 (ref found), inform the operator and re-prompt once.
+   On second collision, skip with "release: tag exists".
+   If `TAG_STATUS` is non-zero AND the error is not a 404, surface the
+   error output to the operator (do not silently swallow non-404 API errors).
+   (Using `gh api .../git/refs/tags/` queries the underlying git ref, catching
+   both bare tags pushed by CI and tags with an associated GitHub Release object.)
 7. Create the release:
-   `gh release create <tag> --title "<tag>" --notes-file <run-dir>/release-notes.md --target <default-branch>`
+   `gh release create <tag> --title "<tag>" --notes-file <run-dir>/release-notes.md --target <resolved-sha>`
    If `gh release create` exits non-zero, surface the error output to the
    operator and note "release: failed" in the terminal summary. Do not retry.
 8. Record in the terminal summary: `Release: <tag> (<release-url>)`.
