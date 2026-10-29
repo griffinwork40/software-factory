@@ -10,7 +10,7 @@ failure_modes:
   - STALE_BASE: "Subagent worktree HEAD is not a descendant of the fetched origin HEAD (or the SHA is unresolvable). Mitigation: subagent step 1 runs git merge-base --is-ancestor and reports STALE-BASE on any non-zero exit."
   - ALREADY_DONE: "Issue already addressed by merged commits or PRs but remains open. Mitigation: step 1 verifies each candidate against HEAD via git log and gh pr list before dispatch."
   - DUPLICATE_PR: "An open PR already exists for the issue. Mitigation: step 1 checks closedByPullRequestsReferences and searches open PRs by issue number."
-  - WRONG_CHECKOUT: "--repo names a different repository than the cwd checkout, so worktrees branch from the wrong repo. Mitigation: none yet (tracked in #3)."
+  - WRONG_CHECKOUT: "--repo names a different repository than the cwd checkout, so worktrees branch from the wrong repo. Mitigation: Step 1 compares gh repo view (cwd) with --repo and stops with Blocked if they differ."
 ---
 
 # Tackle Issues
@@ -35,6 +35,15 @@ Parse from the input:
 ## Execution
 
 ### Step 1 — Discover issues
+
+**Repo match check (fail closed):** If `--repo` was provided, run:
+```bash
+gh repo view --json nameWithOwner -q .nameWithOwner
+```
+This returns the `owner/repo` of the cwd checkout. Compare it (case-insensitively) to the `--repo` value. If they differ, stop immediately with:
+> **Blocked:** `--repo <value>` does not match the cwd checkout (`<cwd-repo>`). Run this command from a checkout of `<value>`.
+
+Do not run `git fetch`, discover issues, or dispatch any subagents until this check passes.
 
 Run `git fetch origin` once. Record:
 - `<default-branch>` via `gh repo view --json defaultBranchRef -q .defaultBranchRef.name`
