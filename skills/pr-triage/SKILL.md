@@ -474,7 +474,7 @@ satisfy this condition):
 2. Fetch the latest existing version tag from GitHub using the git refs API
    (catches bare tags pushed by CI as well as tags backed by a GitHub Release):
    ```bash
-   gh api repos/{owner}/{repo}/git/refs/tags --paginate -q '.[].ref' | sed 's|refs/tags/||' | sort -V | tail -1
+   gh api repos/{owner}/{repo}/git/refs/tags --paginate -q '.[].ref' | sed 's|refs/tags/||' | grep -E '^v[0-9]' | sort -V | tail -1
    ```
    If the output is empty, note "(no prior version tag)".
    Record `<default-branch>` via
