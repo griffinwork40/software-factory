@@ -467,12 +467,15 @@ If any fixes were pushed in Wave 2B AND `--skip-fix` is not set:
 ### Wave 4 — Release (conditional, `--release` only)
 
 If `--release` is set and at least one PR was merged in this session (Wave 2A or
-Wave 3):
+Wave 3; `--skip-fix` suppresses Wave 3 but not Wave 4, so Wave 2A merges alone
+satisfy this condition):
 
 1. Collect all PRs merged this session: number, title, and author.
 2. Fetch the latest existing version tag:
    `git tag --sort=-v:refname --list 'v*' | head -1`
    If no `v*` tags exist, note "(no prior version tag)".
+   Record `<default-branch>` via
+   `gh repo view --json defaultBranchRef -q .defaultBranchRef.name`.
 3. Draft release notes to `<run-dir>/release-notes.md` using `write_file`:
    - Heading: `## What's Changed`
    - One bullet per merged PR: `- <title> (#<N>) @<author>`
@@ -502,6 +505,8 @@ Wave 3):
    "release: tag exists".
 7. Create the release:
    `gh release create <tag> --title "<tag>" --notes-file <run-dir>/release-notes.md --target <default-branch>`
+   If `gh release create` exits non-zero, surface the error output to the
+   operator and note "release: failed" in the terminal summary. Do not retry.
 8. Record in the terminal summary: `Release: <tag> (<release-url>)`.
 
 If `--release` is set but no PRs were merged, note "release: skipped (no merges)"
@@ -527,7 +532,7 @@ Report Done with a structured summary:
 Session closed <N> of <M> PRs. Pre-filter: <on: X light, Y deferred | off: reason>.
 ```
 
-Delete the run dir before reporting: `rm -r <run-dir>`, using the literal path
+Delete the run dir after reporting: `rm -r <run-dir>`, using the literal path
 recorded at run start. Only proceed with deletion if the path starts with
 `.afk/tmp/pr-triage-`; never delete `.afk/tmp/` itself or any other run's
 directory. This cleanup runs regardless of whether Wave 0.5 ran.
