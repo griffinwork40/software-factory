@@ -477,10 +477,13 @@ satisfy this condition):
    Record `<default-branch>` via
    `gh repo view --json defaultBranchRef -q .defaultBranchRef.name`.
 3. Draft release notes to `<run-dir>/release-notes.md` using `write_file`:
+   - Resolve the current HEAD SHA now: `git rev-parse HEAD` → record as `<resolved-sha>`.
    - Heading: `## What's Changed`
    - One bullet per merged PR: `- <title> (#<N>) @<author>`
    - If a prior tag exists, footer:
-     `**Full Changelog**: https://github.com/<repo>/compare/<prior-tag>...HEAD`
+     `**Full Changelog**: https://github.com/<repo>/compare/<prior-tag>...<resolved-sha>`
+   (Using the resolved SHA rather than `HEAD` prevents the URL from drifting if
+   commits land on the default branch between note-drafting and release creation.)
 4. Preview to the operator:
 
    ```
@@ -500,9 +503,12 @@ satisfy this condition):
    non-interactive, skip release creation and note "release: skipped" in the
    terminal summary. **This gate is mandatory** — `--auto-merge` does not
    bypass it because tags are permanent and visible to downstream consumers.
-6. Verify the tag does not already exist: `git tag -l <tag>`. If it exists,
-   inform the operator and re-prompt once. On second collision, skip with
-   "release: tag exists".
+6. Verify the tag does not already exist on GitHub:
+   `gh release view <tag> --repo <repo> 2>/dev/null && echo EXISTS`.
+   If the command exits 0 (release found), inform the operator and re-prompt
+   once. On second collision, skip with "release: tag exists".
+   (Using `gh release view` queries GitHub directly rather than the local clone,
+   catching tags pushed by CI or collaborators since the last fetch.)
 7. Create the release:
    `gh release create <tag> --title "<tag>" --notes-file <run-dir>/release-notes.md --target <default-branch>`
    If `gh release create` exits non-zero, surface the error output to the
