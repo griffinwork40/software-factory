@@ -1,10 +1,10 @@
 ---
 name: tackle-issues
 description: "Tackle N open GitHub issues in parallel using worktree-isolated subagents, producing one PR per issue. Lightweight wrapper — PRs are proposals, not mutations; the safety net is /pr-triage on the next pass."
-argument-hint: "<N> [--label <label>] [--skip <glob>] [--issues <N,N,...>] [--repo <owner/repo>] [--draft] [--sort oldest|newest]"
+argument-hint: "<N> [--label <label>] [--skip <glob>] [--issues <N,N,...>] [--repo <owner/repo>] [--draft] [--sort oldest|newest] [--screen]"
 category: "Build & ship"
 when-to-use: "When you have open issues to burn down in parallel. Triggers on 'tackle issues', 'work on open issues', 'burn down issues', 'make PRs for issues'."
-flags: [--label, --skip, --issues, --repo, --draft, --sort]
+flags: [--label, --skip, --issues, --repo, --draft, --sort, --screen]
 max_tool_use_iterations: 100
 failure_modes:
   - STALE_BASE: "Subagent worktree HEAD is not a descendant of the fetched origin HEAD (or the SHA is unresolvable). Mitigation: subagent step 1 runs git merge-base --is-ancestor and reports STALE-BASE on any non-zero exit."
@@ -30,6 +30,7 @@ Parse from the input:
 | `--repo owner/repo` | (cwd git remote) | Target repository |
 | `--draft` | off | Create draft PRs instead of ready-for-review |
 | `--sort oldest\|newest` | newest | Issue selection order. `newest` (default) tackles recently opened issues first; `oldest` clears the backlog |
+| `--screen` | off | Reject issues whose body is too thin to produce a good PR. Screened issues appear in the Skipped table. |
 
 ## Execution
 
@@ -61,7 +62,13 @@ Before selecting issues to dispatch, verify **every candidate** (including expli
 
 If any merged commits or merged PRs exist for a candidate, inspect the issue's remaining acceptance items against HEAD. If nothing remains unaddressed, skip and report as **already-done**. If partial work was merged but items remain, note the remaining items and include the candidate (the subagent will address only what is left).
 
-Take the first `<N>` issues that pass filters and this verification.
+When `--screen` is set, apply an additional quality filter to each remaining candidate. Read the issue body and reject candidates that are too thin for a subagent to produce a useful PR:
+
+- **No description:** body is empty or fewer than 50 characters after stripping whitespace. Skip with reason **screened: no description**.
+- **Bug without reproduction:** any label contains `bug` (case-insensitive) and the body contains none of: a fenced code block, an error indicator (`Error:`, `Traceback`, `panic:`, `FAIL`, or `at ` followed by a file path), numbered steps, or a heading matching `repro`/`steps`/`how to`. Skip with reason **screened: bug without reproduction**.
+- **Underspecified:** body has no checklist items (`- [ ]` or `- [x]`), no numbered list, and is under 200 characters. Skip with reason **screened: underspecified**.
+
+Take the first `<N>` issues that pass filters, verification, and screening.
 
 If 0 issues pass, report Done with "No eligible issues found" and stop.
 
