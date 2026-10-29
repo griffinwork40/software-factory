@@ -471,16 +471,27 @@ Wave 3; `--skip-fix` suppresses Wave 3 but not Wave 4, so Wave 2A merges alone
 satisfy this condition):
 
 1. Collect all PRs merged this session: number, title, and author.
-2. Fetch the latest existing version tag:
-   `git tag --sort=-v:refname --list 'v*' | head -1`
-   If no `v*` tags exist, note "(no prior version tag)".
+2. Fetch the latest existing version tag from GitHub using the git refs API
+   (catches bare tags pushed by CI as well as tags backed by a GitHub Release):
+   ```bash
+   gh api repos/{owner}/{repo}/git/refs/tags --paginate -q '.[].ref' | sed 's|refs/tags/||' | grep -E '^v[0-9]' | sort -V | tail -1
+   ```
+   If the output is empty, note "(no prior version tag)".
    Record `<default-branch>` via
    `gh repo view --json defaultBranchRef -q .defaultBranchRef.name`.
 3. Draft release notes to `<run-dir>/release-notes.md` using `write_file`:
+   - Resolve the post-merge remote tip SHA now:
+     `gh api repos/{owner}/{repo}/git/ref/heads/<default-branch> -q .object.sha`
+     → record as `<resolved-sha>`.
+     **`<resolved-sha>` must be the post-merge remote tip**, not the local HEAD
+     (which may be stale), so that `--target` in step 7 and the changelog URL in
+     the release notes point at the correct commit.
    - Heading: `## What's Changed`
    - One bullet per merged PR: `- <title> (#<N>) @<author>`
    - If a prior tag exists, footer:
-     `**Full Changelog**: https://github.com/<repo>/compare/<prior-tag>...HEAD`
+     `**Full Changelog**: https://github.com/<repo>/compare/<prior-tag>...<resolved-sha>`
+   (Using the resolved SHA rather than `HEAD` prevents the URL from drifting if
+   commits land on the default branch between note-drafting and release creation.)
 4. Preview to the operator:
 
    ```
@@ -500,11 +511,22 @@ satisfy this condition):
    non-interactive, skip release creation and note "release: skipped" in the
    terminal summary. **This gate is mandatory** — `--auto-merge` does not
    bypass it because tags are permanent and visible to downstream consumers.
-6. Verify the tag does not already exist: `git tag -l <tag>`. If it exists,
-   inform the operator and re-prompt once. On second collision, skip with
-   "release: tag exists".
+6. Verify the tag does not already exist on GitHub (as a release OR a bare
+   git tag):
+   ```bash
+   GH_ERR=$(gh api repos/{owner}/{repo}/git/refs/tags/<tag> --silent 2>&1 >/dev/null); TAG_STATUS=$?
+   # --silent suppresses response body only; stderr is captured into GH_ERR
+   # TAG_STATUS: 0 = ref exists; non-zero + "HTTP 404" in GH_ERR = tag absent; non-zero otherwise = API/network error
+   ```
+   If `TAG_STATUS` is 0 (ref found), inform the operator and re-prompt once.
+   On second collision, skip with "release: tag exists".
+   If `TAG_STATUS` is non-zero and `GH_ERR` does not contain "HTTP 404",
+   surface `GH_ERR` to the operator and re-prompt (do not silently treat as
+   "tag absent" — this is an API or network error, not a missing tag).
+   (Using `gh api .../git/refs/tags/` queries the underlying git ref, catching
+   both bare tags pushed by CI and tags with an associated GitHub Release object.)
 7. Create the release:
-   `gh release create <tag> --title "<tag>" --notes-file <run-dir>/release-notes.md --target <default-branch>`
+   `gh release create <tag> --title "<tag>" --notes-file <run-dir>/release-notes.md --target <resolved-sha>`
    If `gh release create` exits non-zero, surface the error output to the
    operator and note "release: failed" in the terminal summary. Do not retry.
 8. Record in the terminal summary: `Release: <tag> (<release-url>)`.
