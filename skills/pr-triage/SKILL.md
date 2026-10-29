@@ -471,13 +471,21 @@ Wave 3; `--skip-fix` suppresses Wave 3 but not Wave 4, so Wave 2A merges alone
 satisfy this condition):
 
 1. Collect all PRs merged this session: number, title, and author.
-2. Fetch the latest existing version tag from GitHub:
-   `gh release list --repo <repo> --limit 1 --json tagName -q '.[0].tagName'`
-   If no releases exist, note "(no prior version tag)".
+2. Fetch the latest existing version tag from GitHub using the git refs API
+   (catches bare tags pushed by CI as well as tags backed by a GitHub Release):
+   ```bash
+   gh api repos/{owner}/{repo}/git/refs/tags --paginate -q '.[].ref' | sed 's|refs/tags/||' | sort -V | tail -1
+   ```
+   If the output is empty, note "(no prior version tag)".
    Record `<default-branch>` via
    `gh repo view --json defaultBranchRef -q .defaultBranchRef.name`.
 3. Draft release notes to `<run-dir>/release-notes.md` using `write_file`:
-   - Resolve the current HEAD SHA now: `git rev-parse HEAD` → record as `<resolved-sha>`.
+   - Resolve the post-merge remote tip SHA now:
+     `gh api repos/{owner}/{repo}/git/ref/heads/<default-branch> -q .object.sha`
+     → record as `<resolved-sha>`.
+     **`<resolved-sha>` must be the post-merge remote tip**, not the local HEAD
+     (which may be stale), so that `--target` in step 7 and the changelog URL in
+     the release notes point at the correct commit.
    - Heading: `## What's Changed`
    - One bullet per merged PR: `- <title> (#<N>) @<author>`
    - If a prior tag exists, footer:
@@ -505,11 +513,16 @@ satisfy this condition):
    bypass it because tags are permanent and visible to downstream consumers.
 6. Verify the tag does not already exist on GitHub (as a release OR a bare
    git tag):
-   `gh api repos/{owner}/{repo}/git/refs/tags/<tag> --silent; TAG_STATUS=$?`
+   ```bash
+   GH_ERR=$(gh api repos/{owner}/{repo}/git/refs/tags/<tag> --silent 2>&1 >/dev/null); TAG_STATUS=$?
+   # --silent suppresses response body only; stderr is captured into GH_ERR
+   # TAG_STATUS: 0 = ref exists; non-zero + "HTTP 404" in GH_ERR = tag absent; non-zero otherwise = API/network error
+   ```
    If `TAG_STATUS` is 0 (ref found), inform the operator and re-prompt once.
    On second collision, skip with "release: tag exists".
-   If `TAG_STATUS` is non-zero AND the error is not a 404, surface the
-   error output to the operator (do not silently swallow non-404 API errors).
+   If `TAG_STATUS` is non-zero and `GH_ERR` does not contain "HTTP 404",
+   surface `GH_ERR` to the operator and re-prompt (do not silently treat as
+   "tag absent" — this is an API or network error, not a missing tag).
    (Using `gh api .../git/refs/tags/` queries the underlying git ref, catching
    both bare tags pushed by CI and tags with an associated GitHub Release object.)
 7. Create the release:
