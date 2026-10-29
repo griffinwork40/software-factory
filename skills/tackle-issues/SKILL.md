@@ -68,6 +68,8 @@ When `--screen` is set, apply an additional quality filter to each remaining can
 - **Bug without reproduction:** any label contains `bug` (case-insensitive) and the body contains none of: a fenced code block, an error indicator (`Error:`, `Traceback`, `panic:`, `FAIL`, or `at ` followed by a file path), numbered steps, or a heading matching `repro`/`steps`/`how to`. Skip with reason **screened: bug without reproduction**.
 - **Underspecified:** body has no checklist items (`- [ ]` or `- [x]`), no numbered list, and is under 200 characters. Skip with reason **screened: underspecified**.
 
+Apply criteria in order; skip with the first matching reason.
+
 Take the first `<N>` issues that pass filters, verification, and screening.
 
 If 0 issues pass, report Done with "No eligible issues found" and stop.
@@ -97,6 +99,7 @@ If any candidates were skipped during selection, append a "Skipped at selection"
 |---|-------|--------|
 | 198 | Fix typo in README | Already fixed on <head-sha> |
 | 200 | Update auth flow | Claimed by open PR #211 |
+| 202 | Crash on null input | screened: bug without reproduction |
 | 205 | Add retry logic | Already done — merged in PR #198, PR #201 |
 ```
 
