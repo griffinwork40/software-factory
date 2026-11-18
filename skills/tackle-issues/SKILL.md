@@ -54,7 +54,10 @@ This fetch also determines where isolated subagent worktrees start: the runtime 
 If `--issues` provided, fetch those issue records directly with `gh issue view <n> --json number,title,body,labels,assignees` for each. **Do not apply `--label`, `--skip`, or assignee filters to explicit `--issues`; those flags apply only to auto-discovered issues.** Otherwise:
 
 ```bash
-gh issue list --state open --limit <N * 2> --sort created --order <asc if --sort oldest, desc otherwise> --json number,title,body,labels,assignees
+# --sort oldest
+gh issue list --state open --limit <N * 2> --search "sort:created-asc" --json number,title,body,labels,assignees
+# default (--sort newest)
+gh issue list --state open --limit <N * 2> --search "sort:created-desc" --json number,title,body,labels,assignees
 ```
 
 Filter out issues that (auto-discover only):
@@ -121,7 +124,7 @@ Dispatch one `agent` tool call per issue. Issue all calls for the current wave i
 - `model: "claude-sonnet-4-6"`
 - `id_prefix: "issue #<number>"` — TUI label so the live view shows which issue each agent owns
 - `task_slug: "issue-<number>-<title-slug>"` — where `<title-slug>` is the issue title lowercased, non-alphanumerics collapsed to single hyphens, first 3–4 words (e.g. `issue-4112-telegram-retry-logic`). Gives the worktree branch a readable name like `afk/iso-issue-4112-telegram-retry-logic-x7k2qp`. Requires an agent-afk version with `task_slug` support; ignored on older versions.
-- Cap at **5 concurrent**. If there are more than 5 issues, batch them into waves of 5: dispatch wave 1 (5 calls in one reply), wait for all 5 to complete, then before dispatching each subsequent wave re-check that remaining candidate issues are still unclaimed (no new open PRs referencing them since the last wave). For each pending candidate run these two recheck calls in parallel (issue both in a single reply to halve inter-wave latency): `gh pr list --state open --search "#<N> in:title,body"` **and** `gh issue view <N> --json closingIssuesReferences` (to catch PRs linked via GitHub's auto-close UI that won't appear in a title/body search). Note: the recheck uses `closingIssuesReferences` rather than the `closedByPullRequestsReferences` field used in Step 1 discovery — these are different GitHub fields by design; a PR that opens AND merges within one wave span could slip through both, but that window is temporally negligible and safe to ignore. If `gh` exits non-zero during either recheck call, log the issue number as **UNCHECKED**; UNCHECKED candidates are eligible for dispatch — treat them as unclaimed and proceed rather than skipping them. Then dispatch the next wave.
+- Cap at **5 concurrent**. If there are more than 5 issues, batch them into waves of 5: dispatch wave 1 (5 calls in one reply), wait for all 5 to complete, then before dispatching each subsequent wave re-check that remaining candidate issues are still unclaimed (no new open PRs referencing them since the last wave). For each pending candidate run these two recheck calls in parallel (issue both in a single reply to halve inter-wave latency): `gh pr list --state open --search "#<N> in:title,body"` **and** `gh issue view <N> --json closedByPullRequestsReferences` (to catch PRs linked via GitHub's auto-close UI that won't appear in a title/body search). A PR that opens AND merges within one wave span could slip through both checks, but that window is temporally negligible and safe to ignore. If `gh` exits non-zero during either recheck call, log the issue number as **UNCHECKED**; UNCHECKED candidates are eligible for dispatch — treat them as unclaimed and proceed rather than skipping them. Then dispatch the next wave.
 
 Each agent's prompt:
 
