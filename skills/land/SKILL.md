@@ -130,7 +130,7 @@ Cross-check: every finding's `ref:<sha>` should equal `reviewed_sha`; a mismatch
 Candidates are every ledger finding whose fate is `waived-in-review` (severity ≥ low; nits only with `--nits`) or `out-of-scope`, plus human reviewer comments that explicitly say "follow-up", "later" or "separate PR". Then:
 1. Group candidates that share a file and root cause into one issue. Do not file one issue per nit.
 2. Dedupe each group with `gh issue list --state open --search "<2-4 distinctive terms> in:title,body" --limit 5`. A match → `gh issue comment <n> --body-file` linking this PR and finding, and set the fate to `existing #n`.
-3. Otherwise `gh issue create --title "<conventional-prefix>: <defect>" --body-file <tmp>`. The body holds the source PR link, the merge commit, `file:lines` at the merge commit, the finding, the suggested fix, and severity. Add a `follow-up` label only if the repo already has one.
+3. Otherwise `gh issue create --title "<conventional-prefix>: <defect>" --body-file <tmp>`. The body holds the source PR link, the merge commit, `file:lines` at the merge commit, the finding, the suggested fix, and severity. Add a `review-followup` label if the repo has one, otherwise `follow-up` if the repo has that.
 4. Ledger: the fate `filed #n` for each finding.
 
 ### Phase 4: Close and terminal state
