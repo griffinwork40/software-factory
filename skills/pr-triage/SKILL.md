@@ -401,7 +401,7 @@ For each GREEN PR with non-blocking findings, draft a GitHub issue:
 - **Body:** the non-blocking findings list (severity, file/line, description,
   suggestion), the merged PR link, and a note that these were reviewed and
   accepted at merge time.
-- **Labels:** if the repo has a `review-followup` or `tech-debt` label, apply it.
+- **Labels:** apply the first label the repo has in this order: `review-followup`, `follow-up`, `tech-debt`.
 
 Batch-present all drafted issues to the operator for approval:
 
