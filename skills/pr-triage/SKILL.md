@@ -301,8 +301,7 @@ preflight. Delete the `refs/pr-sim/*` refs afterwards.
 
 **Before the first merge**, check that the base branch is green:
 `gh pr view <first-N> --json baseRefName,baseRefOid` to get `<base>` and
-`<base_sha>`, then `gh api repos/{owner}/{repo}/commits/<base_sha>/check-runs`
-(or `gh pr checks <first-N> --json bucket,name,state` filtered to base checks).
+`<base_sha>`, then `gh api repos/{owner}/{repo}/commits/<base_sha>/check-runs`.
 If any required workflow on `<base_sha>` is failing or still pending, **stop the
 merge loop** and report: "Base branch <base> is red or pending at <base_sha7>;
 not merging until it is green." Resume only after the operator confirms the base
@@ -325,10 +324,14 @@ For each GREEN PR in that order, **sequentially** (never parallel):
    - `mergeable` is `UNKNOWN` → GitHub is still computing mergeability after a
      sibling merge. Poll: re-run `gh pr view <N> --json mergeable` every 10 s,
      up to 3 minutes (18 attempts). If `mergeable` resolves to `MERGEABLE`,
-     continue. If it resolves to `CONFLICTED`, apply the conflict rule below. If
+     continue. If it resolves to `CONFLICTING`, apply the conflict rule below. If
      it has not resolved after 3 minutes, SKIP with reason "mergeable UNKNOWN
      after 3 min; re-run pr-triage to retry."
-   - Not mergeable (`CONFLICTED`) — classify the conflict before routing:
+   - Not mergeable (`CONFLICTING`) — classify the conflict before routing:
+     To discover which paths conflict, run:
+     `git merge-tree --write-tree --name-only origin/<base> refs/pr-sim/<N>`
+     This exits 1 on conflict and prints the tree OID on the first line followed
+     by one conflicted path per line, up to the first blank line.
      - **Lockfile or generated-file conflict only** (every conflicted path matches
        a known lockfile or generated pattern: `package-lock.json`, `yarn.lock`,
        `pnpm-lock.yaml`, `*.lock`, or any file listed under `linguist-generated`
@@ -357,9 +360,10 @@ For each GREEN PR in that order, **sequentially** (never parallel):
    step 1 and this call is accepted as irreducible without repo-side locking;
    `--match-head-commit` is the hard backstop that makes it safe.
 4. **After each merge**, verify the base branch CI before proceeding:
+   First, obtain the new base SHA:
+   `gh api repos/{owner}/{repo}/git/ref/heads/<base> --jq .object.sha`
    Wait 5 s for CI to pick up the new base SHA, then check
-   `gh api repos/{owner}/{repo}/commits/<new_base_sha>/check-runs` (or
-   `gh pr checks <next-N> --json bucket,name,state` on the next candidate).
+   `gh api repos/{owner}/{repo}/commits/<new_base_sha>/check-runs`.
    If any required workflow is failing or still pending on the new base SHA,
    **stop the merge loop** and inform the operator: "Base branch <base> is red or
    pending at <new_base_sha7> after merging #<N>; not merging further until it is
