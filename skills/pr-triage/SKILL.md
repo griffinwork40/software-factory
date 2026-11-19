@@ -490,8 +490,14 @@ satisfy this condition):
    - One bullet per merged PR: `- <title> (#<N>) @<author>`
    - If a prior tag exists, footer:
      `**Full Changelog**: https://github.com/<repo>/compare/<prior-tag>...<resolved-sha>`
-   (Using the resolved SHA rather than `HEAD` prevents the URL from drifting if
-   commits land on the default branch between note-drafting and release creation.)
+   (`<resolved-sha>` is snapshotted here at draft time. If commits land on the
+   default branch during operator review (steps 4-5), the changelog URL will
+   reflect state at draft time, not at release time. This narrow drift window
+   (typically seconds to minutes of operator review) is accepted: re-resolving
+   the SHA immediately before step 7 would risk releasing commits the operator
+   never reviewed and that the drafted notes do not describe. The release itself
+   is always pinned to the reviewed commit via `--target <resolved-sha>` in
+   step 7, so only the changelog URL is affected by any drift.)
 4. Preview to the operator:
 
    ```
