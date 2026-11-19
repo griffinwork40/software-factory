@@ -412,6 +412,58 @@ For each GREEN PR in that order, **sequentially** (never parallel):
    in the merge prompt. Under `--auto-merge`, record the same in the terminal
    summary for that PR: "#<N> merged with rewritten message: <rewritten
    references>; PR body edited: yes/no", followed by the body file contents.
+1b. **Fresh-base CI for ratchet and baseline files.** A PR whose checks passed
+   on an older base can still break the base when it merges, if it touches a
+   file whose correct content depends on the base (a ratchet count, a
+   generated baseline, a snapshot) or a file a sibling merged earlier in this
+   run. Such a PR needs a CI run on the current base before it merges.
+   1. List the PR's changed paths:
+      `git diff --name-only origin/<base>...refs/pr-sim/<N>`.
+   2. A path is a **ratchet or baseline path** if either row below matches:
+
+      | Source | Matches when |
+      |--------|--------------|
+      | Repo docs | The path is listed under `linguist-generated` in `.gitattributes`, or AFK.md, CLAUDE.md or CONTRIBUTING names it (or a directory or glob containing it) as generated, ratchet or baseline content, or as the output of a documented regenerate or baseline-update command (the same search Wave 2B uses). |
+      | This run | The path is in `merged_paths`, the set of paths changed by PRs merged earlier in this run (step 4 records it; empty before the first merge). |
+
+      If no path matches, go to step 2.
+   3. If `git merge-base --is-ancestor origin/<base> refs/pr-sim/<N>` exits 0,
+      the branch already contains the current base: skip to sub-step 5.
+      Otherwise the branch must be updated.
+   4. Update the branch: `gh pr update-branch <N>`. This pushes a merge commit
+      to the PR branch, so it has its own gate. Without `--auto-merge` (and
+      always for Light route PRs), ask the operator first:
+      `"#<N> touches <matched paths> and is behind <base>. Update its branch with <base> (pushes a merge commit) and wait for CI before merging? (y/n)"`
+      Under `--auto-merge` the update runs without this prompt: it inherits the
+      `--auto-merge` bypass, the same as the Wave 2B `/fix-pr` pushes. Record
+      "#<N> branch updated with <base> at <base_sha7>" in the terminal summary.
+      If the operator declines, move the PR to SKIP with reason "needs a CI run
+      on the current base". If the command fails (for example a conflict, or a
+      fork that does not allow maintainer edits), move the PR to BLOCKED with
+      the error text.
+      After a successful update, read the new head with
+      `gh pr view <N> --json headRefOid` and its parents with
+      `gh api repos/{owner}/{repo}/commits/<new_head>/commits --jq '[.parents[].sha]'`.
+      If the parents are exactly `<fetched_sha>` and the current base SHA
+      (`git rev-parse origin/<base>`), the
+      new head adds only base content that is already merged: set
+      `fetched_sha` to `<new_head>` (step 3 uses it with
+      `--match-head-commit`) and refresh the local ref with
+      `git fetch origin +pull/<N>/head:refs/pr-sim/<N>`. If the parents differ,
+      someone else pushed: apply the "head moved" rule from step 1.
+   5. Wait for the PR's checks on the current head:
+      - `base_check_count` is 0 (the repo has no CI): do not wait. Proceed to
+        step 2 and record "#<N> touches <matched paths>; no CI in repo, merged
+        without a fresh-base run" in the terminal summary.
+      - Otherwise poll
+        `gh pr view <N> --json statusCheckRollup --jq '.statusCheckRollup | length'`
+        every 10 s, up to 3 minutes (18 attempts), until it is above 0. If it
+        stays 0, move the PR to SKIP with reason "no checks ran on the updated
+        head <sha7>" and go to the next PR. Once it is above 0, run
+        `gh pr checks <N> --watch --fail-fast`. Exit 0
+        means every check passed or was skipped: proceed to step 2. Any other
+        exit means a check failed or was cancelled: move the PR to BLOCKED with
+        reason "checks failed on current base" and the failing check names.
 2. Unless `--auto-merge` is set, confirm with operator:
    `"Merge #<N> '<title>' into <base>? (y/n)"`
    When step 1a rewrote the message, use this prompt instead, followed by the
@@ -434,7 +486,8 @@ For each GREEN PR in that order, **sequentially** (never parallel):
    eliminates the risk of landing an unreviewed commit. The TOCTOU window between
    step 1 and this call is accepted as irreducible without repo-side locking;
    `--match-head-commit` is the hard backstop that makes it safe.
-4. **After each merge**, verify the base branch CI before proceeding:
+4. **After each merge**, add the PR's changed paths from step 1b sub-step 1
+   to `merged_paths`. Then verify the base branch CI before proceeding:
    First, obtain the new base SHA:
    `gh api repos/{owner}/{repo}/git/ref/heads/<base> --jq .object.sha`
    Wait 5 s for CI to pick up the new base SHA, then check
