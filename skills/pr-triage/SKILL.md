@@ -358,13 +358,75 @@ For each GREEN PR in that order, **sequentially** (never parallel):
        fix guidance.
      - **Semantic conflict** (any conflicted path is not a lockfile or generated
        file): move to BLOCKED bucket and inform operator.
+1a. **Closing-keyword check.** A PR can say `Refs #I` in its body because it
+   only partly fixes issue `#I` while one of its commits still says
+   `Closes #I`. A default merge carries that text onto the base and GitHub
+   closes the issue. Before every merge:
+   1. List the closing references in the PR body and in every commit message:
+      `gh pr view <N> --json body,commits --jq '.body, (.commits[] | .messageHeadline, .messageBody)' | grep -Eio '\b(close[sd]?|fix(e[sd])?|resolve[sd]?):?[[:space:]]+([[:alnum:]_.-]+/[[:alnum:]_.-]+#|https://github\.com/[[:alnum:]_.-]+/[[:alnum:]_.-]+/issues/|#)[0-9]+'`
+      (grep exits 1 when there are none). Also read
+      `gh pr view <N> --json closingIssuesReferences --jq '[.closingIssuesReferences[].number]'`,
+      which lists issues linked through the PR body or the Development sidebar
+      but not issues named only in commit messages. Ignore references that name
+      a different repository.
+   2. For each issue `#I` found, decide whether this PR fully addresses it.
+      Read `gh issue view <I> --json title,body` and compare it with the PR
+      body, the Wave 1 review result and the diff. Count `#I` as **partial**
+      if any of these holds: the PR body mentions `#I` only with a non-closing
+      word (`Refs`, `Part of`, `Related to`) while a commit closes it; the PR
+      body or the review says part of `#I` is deferred, left out or out of
+      scope; `#I` lists separate items and the diff does not address every
+      one. When the evidence is unclear, count it as partial: an issue left
+      open by mistake is cheap to close by hand, while a wrongly closed one
+      hides unfinished work.
+   3. No partial issues: merge as step 3 describes, with the default message.
+   4. One or more partial issues: never use the default merge message. Build
+      an explicit one:
+      - Write the subject `<PR title> (#<N>)` to `<run-dir>/merge-subject-<N>.txt`.
+      - Write the body to `<run-dir>/merge-body-<N>.md`: the PR body, with every
+        closing reference to a partial issue rewritten to `Refs #I`. References
+        to fully addressed issues stay as they are. Add any other operator merge
+        rule (for example a co-author trailer) to this same file.
+      - Re-run the `grep -Eio` pattern from sub-step 1 on the body file and
+        confirm no closing reference to a partial issue remains.
+      - If a closing reference to a partial issue appears in the **PR body**,
+        also write the rewritten body to `<run-dir>/pr-body-<N>.md` and, at
+        merge time, run `gh pr edit <N> --body-file <run-dir>/pr-body-<N>.md`
+        before the merge command. GitHub closes issues linked from the PR body
+        no matter what the merge commit says.
+      - If a closing reference to a partial issue appears in a **commit
+        message**, the merge must use `--squash`: `--merge` and `--rebase` put
+        the original commits on the base unchanged, so their keywords still
+        close the issue. Check `gh api repos/{owner}/{repo} --jq .allow_squash_merge`.
+        If it is `false`, do not merge: move the PR to SKIP with reason
+        "commit closes partial issue #I and squash merge is disabled; reword
+        the commit, then re-run", and inform the operator.
+      - If a partial issue is in `closingIssuesReferences` but no closing
+        keyword for it appears in the PR body, it is linked through the
+        Development sidebar, which `gh pr edit` cannot remove. Move the PR to
+        SKIP with reason "issue #I is linked to close on merge; unlink it on
+        GitHub, then re-run", and inform the operator.
+   **Gate:** the rewritten message is part of the merge decision. Without
+   `--auto-merge` (and always for Light route PRs), step 2 shows the subject,
+   the full body file, the list of rewritten references and any PR body edit
+   in the merge prompt. Under `--auto-merge`, record the same in the terminal
+   summary for that PR: "#<N> merged with rewritten message: <rewritten
+   references>; PR body edited: yes/no", followed by the body file contents.
 2. Unless `--auto-merge` is set, confirm with operator:
    `"Merge #<N> '<title>' into <base>? (y/n)"`
+   When step 1a rewrote the message, use this prompt instead, followed by the
+   subject, the body file contents and the PR body edit (if any):
+   `"Merge #<N> '<title>' into <base> with a rewritten message (closing keywords for partial issues <#I list> changed to Refs)? (y/n)"`
    `--auto-merge` does not cover PRs on the Light route: always confirm those
    individually, since they were reviewed on a cheaper model.
 3. Merge: `gh pr merge <N> --merge --delete-branch --match-head-commit <fetched_sha>`
    (Use `--merge` not `--squash` unless the PR is single-commit; respect repo's
    merge strategy if detectable from `gh api repos/{owner}/{repo}` settings.)
+   When step 1a rewrote the message, run the `gh pr edit` from step 1a first if
+   it applies, then merge with the explicit subject and body file:
+   `gh pr merge <N> --squash --subject "$(cat <run-dir>/merge-subject-<N>.txt)" --body-file <run-dir>/merge-body-<N>.md --delete-branch --match-head-commit <fetched_sha>`
+   (use `--merge` in place of `--squash` only when no commit message holds a
+   closing reference to a partial issue and the repo strategy calls for it).
    **`--match-head-commit` is the last-resort guard against merge races.** If a
    concurrent pr-triage run (or any other actor) merges this PR or pushes new
    commits between step 1's state check and this merge call, GitHub will reject
