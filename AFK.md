@@ -30,7 +30,7 @@ Verify a skill change by running it for real against a repo with open issues/PRs
 | `.claude-plugin/plugin.json` | Plugin manifest (name, version, description, repo). Bump `version` on release. |
 | `skills/tackle-issues/SKILL.md` | ~180 lines. Steps 1-4: discover issues, present hit list, parallel `agent` dispatch, report. |
 | `skills/pr-triage/SKILL.md` | ~420 lines. Waves 0 (preflight), 0.5 (Jev pre-filter), 1 (parallel `/review`), 1.5 (triage gate), 2A/2B/2C (merge, fix, advisory issues), 3 (re-review). |
-| `skills/land/SKILL.md` | ~165 lines. Single PR to merged. Phases 0 (preflight), 1 (review/fix round loop with convergence check), 2 (merge gate at reviewed SHA), 3 (deduped follow-up issues), 4 (close and verdict). `context: load`: must run top-level, never from a subagent. |
+| `skills/land/SKILL.md` | ~175 lines. Single PR to merged. Phases 0 (preflight, including the resume rules for an existing ledger), 1 (review/fix round loop with convergence check), 2 (merge gate at reviewed SHA), 3 (deduped follow-up issues), 4 (close and verdict). `context: load`: must run top-level, never from a subagent. |
 | `README.md` | User-facing overview, usage, requirements. Keep in sync with skill flags. |
 
 Skill dependencies:

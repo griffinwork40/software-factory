@@ -14,6 +14,7 @@ failure_modes:
   - REVIEW_FINDINGS_INVISIBLE_TO_FIX: "/review is read-only and never posts, so its findings exist only in the coordinator's context, while /fix-pr builds its spec from GitHub stores. Mitigation: land posts the blocking set as an issue-level PR comment (gh pr comment), which /fix-pr's Phase 1 source 3 (gh pr view --json comments) already harvests."
   - NESTED_REVIEW_COLLISION: "/review invoked from a subagent hits max_depth. Mitigation: context: load — land runs in the top-level coordinator and calls /review and /fix-pr directly, never from a fork."
   - DUPLICATE_ISSUES: "Follow-ups re-file something already tracked. Mitigation: search open issues per follow-up; comment on the existing issue instead of creating a new one."
+  - STALE_LEDGER_TRUSTED: "A resumed run inherits an earlier run's flags, its 'no operator rules' line, or a round that never went through /review, and merges on that basis. Mitigation: resume re-runs preflight in full, takes flags only from the current invocation, and accepts a recorded round only when the ledger holds the verbatim Decision line at the current head SHA."
 ---
 
 # land
@@ -45,7 +46,7 @@ Within this plugin, `/land` is the single-PR counterpart to `/pr-triage`: `/pr-t
 3. **No force.** Plain `git push` to the PR head branch only. Conflicts are resolved by merging base into head, never by rebase + force.
 4. **Bounded and convergent.** At most `--max-rounds` fix rounds (default 3). A blocking defect that survives two fix rounds means STALLED, not another attempt.
 5. **Every finding gets exactly one fate.** `fixed` · `triaged-out` (by /fix-pr probes, with reason) · `waived-in-review` (non-blocking at final review) → `filed #N` or `existing #N` or `skipped-nit` · `out-of-scope` (declared by /fix-pr) → `filed #N` · `unresolved`. Any `unresolved` finding rules out LANDED.
-6. **Ledger is the source of truth.** Append to `<repo>/.afk/land/pr-<N>.md` after every phase. On resume, read it first and continue from the last completed phase.
+6. **Ledger is the source of truth for findings, not for the world.** Append to `<repo>/.afk/land/pr-<N>.md` after every phase. On resume, read it first, then apply the resume rules in Phase 0 step 7 before continuing. A ledger records what an earlier run believed. PR state, flags, operator rules and whether a round was really reviewed are re-established on every run.
 
 ## Arguments
 
@@ -74,8 +75,14 @@ Parse these from `$ARGUMENTS`:
    - Cross-repo head with `maintainerCanModify == false` → fixes cannot be pushed; continue in review-only mode and stop at READY or BLOCKED.
 3. **Merge authority.** The human typing `/land <pr>` is explicit intent to merge. If /land was routed by a model rather than typed by the operator, and `--auto-merge` is absent, the merge gate in Phase 2 requires an `ask_question` confirm. `--no-merge` always stops at READY.
 4. **Merge strategy.** `gh api repos/{owner}/{repo} --jq '{squash:.allow_squash_merge,merge:.allow_merge_commit,rebase:.allow_rebase_merge,del:.delete_branch_on_merge}'` plus `git log origin/<base> --format=%s -10`. If base history is `<subject> (#NNNN)` lines and squash is allowed → squash. Otherwise use the first allowed of merge > rebase.
-5. **Operator merge rules.** `memory_search "merge"` scoped to this repo, and read hot memory. Collect every rule that touches merging: commit identity or co-author rewrites, required squash body handling, contributor thank-yous. These are applied in Phase 2 and 4, never improvised.
+5. **Operator merge rules.** `memory_search "merge"` scoped to this repo, and read hot memory. Collect every rule that touches merging: commit identity or co-author rewrites, required squash body handling, contributor thank-yous. These are applied in Phase 2 and 4, never improvised. Run at least two queries (`merge`, and one naming the mechanics: `squash OR "co-author" OR thank*`) and record in the ledger each rule with its source (hot memory or fact id) plus the exact queries. Write `none` only next to the queries that returned nothing; a bare `none` is not a result.
 6. Write the ledger header: PR, base, head, strategy, rules collected, flags, start time.
+7. **Resume (only when a ledger already exists).** Open a new `# Run <k>` section and never rewrite earlier sections. Then:
+   - **Flags come from this invocation only.** A flag an earlier run recorded (for example `--no-merge`) does not carry over.
+   - **Steps 2 to 5 run again in full.** Compare the results with the earlier header and note every difference: head moved, strategy changed, operator rules the earlier run missed.
+   - **A recorded round counts as reviewed only if the ledger holds all three:** the verbatim `Decision:` line from /review, a `reviewed_sha` equal to the current `headRefOid`, and findings that carry `ref:<sha>`. Inline notes, a list of confirmations, a missing `Decision:` line, or a different SHA are not a review. Record which test failed and re-enter at 1b. Fix rounds an earlier run already spent still count toward `--max-rounds`.
+   - **Fates carry over only from rounds that pass that test.** Mark findings from a rejected round `superseded`, and prefix IDs from this run with the run number (`2:R1.1`) so the two sets cannot be confused.
+   - **Skip only what GitHub can confirm:** a posted round comment whose URL still resolves, a pushed fix whose SHA is an ancestor of the head, a filed issue whose number exists. Everything else is redone.
 
 `--dry-run` stops after Phase 1's first review and prints the planned actions, with no posts, pushes, merges, or issues.
 
@@ -94,6 +101,8 @@ Capture `headRefOid` (`gh pr view <pr> --json headRefOid`) as this round's `revi
 - the `Decision: MERGE|DO NOT MERGE — <counts>` line (absent → the hop FAILED; retry once, then BLOCKED);
 - every finding: severity, `blocking`, dimension, `file:line_range`, `ref:<sha>`, finding sentence, suggestion.
 Cross-check: every finding's `ref:<sha>` should equal `reviewed_sha`; a mismatch means the head moved mid-review, so discard the review and repeat 1b (counts against nothing). Assign each finding an ID `R<r>.<k>` and a **fingerprint** = `dimension | file | the defect in ≤8 normalized words`. Fingerprints identify the same defect across rounds; judge "same defect" semantically, using the fingerprint as the key.
+
+Write to the ledger: `reviewed_sha`, the verbatim `Decision:` line, and one row per finding. Reading the diff yourself and noting observations is not this step. If /review cannot run, the round is BLOCKED, never self-reviewed.
 
 #### 1c. CI state
 `gh pr checks <pr> --json name,bucket,link`. If any bucket is `pending`, wait (`wait_for` command, polling until no `pending` remains, ≤10 min per call, ≤30 min total). Failed required checks count as blocking items with source `ci:<name>`.
