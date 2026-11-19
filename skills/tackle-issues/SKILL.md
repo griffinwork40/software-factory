@@ -87,7 +87,7 @@ When `--screen` is set, apply an additional quality filter to each remaining can
 - **Bug without reproduction:** any label contains `bug` (case-insensitive) and the body contains none of: a fenced code block, an error indicator (`Error:`, `Traceback`, `panic:`, `FAIL`, or `at ` followed by a file path), numbered steps, or a heading matching `repro`/`steps`/`how to`. Skip with reason **screened: bug without reproduction**.
 - **Underspecified:** body has no checklist items (`- [ ]` or `- [x]`), no numbered list, and is under 200 characters. Skip with reason **screened: underspecified**.
 
-Apply criteria in order; skip with the first matching reason.
+Apply criteria in order; skip with the first matching reason. An issue with a label containing `bug` and a body under 50 characters after stripping whitespace is caught by **no description** before it reaches **bug without reproduction**.
 
 Take the first `<N>` issues that pass filters, verification, and screening.
 
