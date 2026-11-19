@@ -10,7 +10,7 @@ failure_modes:
   - STALE_BASE: "Subagent worktree HEAD is not a descendant of the fetched origin HEAD (or the SHA is unresolvable). Mitigation: subagent step 1 runs git merge-base --is-ancestor and reports STALE-BASE on any non-zero exit."
   - ALREADY_DONE: "Issue already addressed by merged commits or PRs but remains open. Mitigation: step 1 verifies each candidate against HEAD via git log and gh pr list before dispatch."
   - DUPLICATE_PR: "An open PR already exists for the issue. Mitigation: step 1 checks closedByPullRequestsReferences and searches open PRs by issue number."
-  - WRONG_CHECKOUT: "--repo names a different repository than the cwd checkout, so worktrees branch from the wrong repo. Mitigation: Step 1 compares gh repo view (cwd) with --repo and stops with Blocked if they differ."
+  - WRONG_CHECKOUT: "When --repo is provided, Step 1 compares gh repo view (cwd) with --repo and stops with Blocked if they differ or the identity check fails. When --repo is omitted, no repository identity check runs."
 ---
 
 # Tackle Issues
@@ -40,7 +40,9 @@ Parse from the input:
 ```bash
 gh repo view --json nameWithOwner -q .nameWithOwner
 ```
-This returns the `owner/repo` of the cwd checkout. Compare it (case-insensitively) to the `--repo` value. If they differ, stop immediately with:
+If `gh repo view` exits with a nonzero status, stop immediately with **Blocked:** unable to verify cwd repository identity (`gh repo view` failed). Do not proceed.
+
+On success, this returns the `owner/repo` of the cwd checkout. Compare it without regard to case to the `--repo` value. If they differ, stop immediately with:
 > **Blocked:** `--repo <value>` does not match the cwd checkout (`<cwd-repo>`). Run this command from a checkout of `<value>`.
 
 Do not run `git fetch`, discover issues, or dispatch any subagents until this check passes.
