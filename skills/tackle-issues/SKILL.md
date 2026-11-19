@@ -53,17 +53,18 @@ This fetch also determines where isolated subagent worktrees start: the runtime 
 
 If `--issues` provided, fetch those issue records directly with `gh issue view <n> --json number,title,body,labels,assignees` for each. **Do not apply `--label`, `--skip`, or assignee filters to explicit `--issues`; those flags apply only to auto-discovered issues.** Otherwise:
 
+When `--label` is provided, replace `<label-filter>` with `--label` followed by the supplied label as one shell argument, using shell quoting as needed. Otherwise, remove `<label-filter>`. GitHub applies this filter before the limit, so only matching issues count toward `<N * 2>`.
+
 ```bash
 # --sort oldest
-gh issue list --state open --limit <N * 2> --search "sort:created-asc" --json number,title,body,labels,assignees
+gh issue list --state open <label-filter> --limit <N * 2> --search "sort:created-asc" --json number,title,body,labels,assignees
 # default (--sort newest)
-gh issue list --state open --limit <N * 2> --search "sort:created-desc" --json number,title,body,labels,assignees
+gh issue list --state open <label-filter> --limit <N * 2> --search "sort:created-desc" --json number,title,body,labels,assignees
 ```
 
 Filter out issues that (auto-discover only):
 - Are assigned to someone else
 - Match `--skip` pattern
-- Don't match `--label` filter (if set)
 - Already have an open PR linked. Check via `gh issue view <number> --json closedByPullRequestsReferences` (linked PRs) plus `gh pr list --state open --search "#<number> in:title,body"` and scan open PRs whose branch name suggests the issue number. If any linked or referencing open PR exists, skip.
 
 Before selecting issues to dispatch, verify **every candidate** (including explicit `--issues`) against `<head-sha>`. For each candidate issue `<N>`:
