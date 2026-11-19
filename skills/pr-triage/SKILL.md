@@ -297,19 +297,29 @@ conflicts in simulation is still attempted last (its conflict may be with a PR
 the operator later declines), and goes to BLOCKED by step 1 if it really does
 conflict. Show the planned order and the simulated conflicts in the merge
 confirm. Requires git ≥ 2.38 (`merge-tree --write-tree`), enforced by Wave 0
-preflight. Delete the `refs/pr-sim/*` refs afterwards.
+preflight. Keep the `refs/pr-sim/*` refs until the merge loop below has
+finished, because step 1 reuses `refs/pr-sim/<N>` to classify conflicts. Delete
+them only when the merge loop has ended for good: after the last PR in the order
+has been handled (merged, skipped or moved to BLOCKED), or when the run ends
+while the loop is stopped and not resumed:
+`git for-each-ref --format='delete %(refname)' refs/pr-sim/ | git update-ref --stdin`.
 
 **Before the first merge**, check that the base branch is green:
 `gh pr view <first-N> --json baseRefName,baseRefOid` to get `<base>` and
 `<base_sha>`, then `gh api repos/{owner}/{repo}/commits/<base_sha>/check-runs`.
-If any required workflow on `<base_sha>` is failing or still pending, **stop the
-merge loop** and report: "Base branch <base> is red or pending at <base_sha7>;
-not merging until it is green." Resume only after the operator confirms the base
-is clean.
+Record its `total_count` as `base_check_count`.
+- `total_count` is 0: the base has no check runs, so the repo has no CI on this
+  branch. Treat the base as green and proceed. Do not wait for checks to appear.
+- Otherwise, if any required workflow on `<base_sha>` is failing or still
+  pending, **stop the merge loop** and report: "Base branch <base> is red or
+  pending at <base_sha7>; not merging until it is green." Resume only after the
+  operator confirms the base is clean.
 
 For each GREEN PR in that order, **sequentially** (never parallel):
 
-1. Re-check state and mergeability:
+1. Refresh the local base ref with `git fetch origin <base>`. A sibling merge
+   earlier in this loop moved the remote base, and every later `origin/<base>`
+   in this iteration must see it. Then re-check state and mergeability:
    `gh pr view <N> --json state,headRefOid,mergeable,mergeStateStatus`.
    - `state` is not `OPEN` → SKIP ("merged/closed by another actor"); **continue**
      to the next PR instead of stopping the merge loop.
@@ -341,8 +351,11 @@ For each GREEN PR in that order, **sequentially** (never parallel):
        or generated-file conflict by rebasing onto the current base and
        regenerating (check AFK.md / CLAUDE.md / CONTRIBUTING for a regenerate
        command; agent-afk uses `pnpm regen:generated`); do not hand-edit the
-       generated content." Without `--auto-merge`, move to BLOCKED and inform the
-       operator with the same fix guidance.
+       generated content." This `/fix-pr` dispatch pushes to the PR branch
+       without a per-PR gate: it inherits the `--auto-merge` bypass, the same
+       as every Wave 2B `/fix-pr` dispatch under `--auto-merge`. Without
+       `--auto-merge`, move to BLOCKED and inform the operator with the same
+       fix guidance.
      - **Semantic conflict** (any conflicted path is not a lockfile or generated
        file): move to BLOCKED bucket and inform operator.
 2. Unless `--auto-merge` is set, confirm with operator:
@@ -364,10 +377,18 @@ For each GREEN PR in that order, **sequentially** (never parallel):
    `gh api repos/{owner}/{repo}/git/ref/heads/<base> --jq .object.sha`
    Wait 5 s for CI to pick up the new base SHA, then check
    `gh api repos/{owner}/{repo}/commits/<new_base_sha>/check-runs`.
-   If any required workflow is failing or still pending on the new base SHA,
-   **stop the merge loop** and inform the operator: "Base branch <base> is red or
-   pending at <new_base_sha7> after merging #<N>; not merging further until it is
-   green." Resume only after the operator confirms the base is clean.
+   - `total_count` is 0 and `base_check_count` is 0: the repo has no CI. Treat
+     the new base as green and proceed to the next PR.
+   - `total_count` is 0 but `base_check_count` was above 0: CI has not
+     registered the new SHA yet. Re-check every 10 s, up to 3 minutes (18
+     attempts). If it is still 0, **stop the merge loop** and inform the
+     operator: "No check runs appeared on <base> at <new_base_sha7> after
+     merging #<N>; not merging further until CI reports."
+   - Otherwise, if any required workflow is failing or still pending on the new
+     base SHA, **stop the merge loop** and inform the operator: "Base branch
+     <base> is red or pending at <new_base_sha7> after merging #<N>; not merging
+     further until it is green." Resume only after the operator confirms the
+     base is clean.
 
 #### 2B — Fix Blocked PRs
 
