@@ -299,6 +299,14 @@ conflict. Show the planned order and the simulated conflicts in the merge
 confirm. Requires git ≥ 2.38 (`merge-tree --write-tree`), enforced by Wave 0
 preflight. Delete the `refs/pr-sim/*` refs afterwards.
 
+**Before the first merge**, check that the base branch is green:
+`gh pr view <first-N> --json baseRefName,baseRefOid` to get `<base>` and
+`<base_sha>`, then `gh api repos/{owner}/{repo}/commits/<base_sha>/check-runs`.
+If any required workflow on `<base_sha>` is failing or still pending, **stop the
+merge loop** and report: "Base branch <base> is red or pending at <base_sha7>;
+not merging until it is green." Resume only after the operator confirms the base
+is clean.
+
 For each GREEN PR in that order, **sequentially** (never parallel):
 
 1. Re-check state and mergeability:
@@ -313,8 +321,30 @@ For each GREEN PR in that order, **sequentially** (never parallel):
      again, then merge with `--match-head-commit <new_sha>` and note
      "merged unreviewed SHA <new_sha7>" in the terminal summary. Otherwise
      move to SKIP.
-   - Not mergeable (conflict from sibling merge) → move to BLOCKED bucket
-     and inform operator.
+   - `mergeable` is `UNKNOWN` → GitHub is still computing mergeability after a
+     sibling merge. Poll: re-run `gh pr view <N> --json mergeable` every 10 s,
+     up to 3 minutes (18 attempts). If `mergeable` resolves to `MERGEABLE`,
+     continue. If it resolves to `CONFLICTING`, apply the conflict rule below. If
+     it has not resolved after 3 minutes, SKIP with reason "mergeable UNKNOWN
+     after 3 min; re-run pr-triage to retry."
+   - Not mergeable (`CONFLICTING`) — classify the conflict before routing:
+     To discover which paths conflict, run:
+     `git merge-tree --write-tree --name-only origin/<base> refs/pr-sim/<N>`
+     This exits 1 on conflict and prints the tree OID on the first line followed
+     by one conflicted path per line, up to the first blank line.
+     - **Lockfile or generated-file conflict only** (every conflicted path matches
+       a known lockfile or generated pattern: `package-lock.json`, `yarn.lock`,
+       `pnpm-lock.yaml`, `*.lock`, or any file listed under `linguist-generated`
+       in `.gitattributes`): under `--auto-merge`, treat as a fix-and-re-verify
+       item. Dispatch a single `/fix-pr <N>` agent (after 2A completes, alongside
+       other BLOCKED PRs in Wave 2B) with the instruction: "resolve the lockfile
+       or generated-file conflict by rebasing onto the current base and
+       regenerating (check AFK.md / CLAUDE.md / CONTRIBUTING for a regenerate
+       command; agent-afk uses `pnpm regen:generated`); do not hand-edit the
+       generated content." Without `--auto-merge`, move to BLOCKED and inform the
+       operator with the same fix guidance.
+     - **Semantic conflict** (any conflicted path is not a lockfile or generated
+       file): move to BLOCKED bucket and inform operator.
 2. Unless `--auto-merge` is set, confirm with operator:
    `"Merge #<N> '<title>' into <base>? (y/n)"`
    `--auto-merge` does not cover PRs on the Light route: always confirm those
@@ -329,10 +359,15 @@ For each GREEN PR in that order, **sequentially** (never parallel):
    eliminates the risk of landing an unreviewed commit. The TOCTOU window between
    step 1 and this call is accepted as irreducible without repo-side locking;
    `--match-head-commit` is the hard backstop that makes it safe.
-4. **After each merge**, verify the base branch CI:
-   - `gh pr checks` on the next candidate (if any) — if the base branch now
-     shows failures, **stop merging** and inform the operator.
-   - Brief pause (5s) to let CI pick up the new base.
+4. **After each merge**, verify the base branch CI before proceeding:
+   First, obtain the new base SHA:
+   `gh api repos/{owner}/{repo}/git/ref/heads/<base> --jq .object.sha`
+   Wait 5 s for CI to pick up the new base SHA, then check
+   `gh api repos/{owner}/{repo}/commits/<new_base_sha>/check-runs`.
+   If any required workflow is failing or still pending on the new base SHA,
+   **stop the merge loop** and inform the operator: "Base branch <base> is red or
+   pending at <new_base_sha7> after merging #<N>; not merging further until it is
+   green." Resume only after the operator confirms the base is clean.
 
 #### 2B — Fix Blocked PRs
 
