@@ -10,7 +10,7 @@ failure_modes:
   - STALE_BASE: "Subagent worktree HEAD is not a descendant of the fetched origin HEAD (or the SHA is unresolvable). Mitigation: subagent step 1 runs git merge-base --is-ancestor and reports STALE-BASE on any non-zero exit."
   - ALREADY_DONE: "Issue already addressed by merged commits or PRs but remains open. Mitigation: step 1 verifies each candidate against HEAD via git log and gh pr list before dispatch."
   - DUPLICATE_PR: "An open PR already exists for the issue. Mitigation: step 1 checks closedByPullRequestsReferences and searches open PRs by issue number."
-  - WRONG_CHECKOUT: "--repo names a different repository than the cwd checkout, so worktrees branch from the wrong repo. Mitigation: Step 1 compares gh repo view (cwd) with --repo and stops with Blocked if they differ."
+  - WRONG_CHECKOUT: "When --repo is provided, Step 1 compares gh repo view (cwd) with --repo and stops with Blocked if they differ or the identity check fails. When --repo is omitted, no repository identity check runs."
 ---
 
 # Tackle Issues
@@ -40,7 +40,9 @@ Parse from the input:
 ```bash
 gh repo view --json nameWithOwner -q .nameWithOwner
 ```
-This returns the `owner/repo` of the cwd checkout. Compare it (case-insensitively) to the `--repo` value. If they differ, stop immediately with:
+If `gh repo view` exits with a nonzero status, stop immediately with **Blocked:** unable to verify cwd repository identity (`gh repo view` failed). Do not proceed.
+
+On success, this returns the `owner/repo` of the cwd checkout. Compare it without regard to case to the `--repo` value. If they differ, stop immediately with:
 > **Blocked:** `--repo <value>` does not match the cwd checkout (`<cwd-repo>`). Run this command from a checkout of `<value>`.
 
 Do not run `git fetch`, discover issues, or dispatch any subagents until this check passes.
@@ -53,17 +55,22 @@ This fetch also determines where isolated subagent worktrees start: the runtime 
 
 If `--issues` provided, fetch those issue records directly with `gh issue view <n> --json number,title,body,labels,assignees` for each. **Do not apply `--label`, `--skip`, or assignee filters to explicit `--issues`; those flags apply only to auto-discovered issues.** Otherwise:
 
+Build and run exactly one discovery command using these rules:
+
+1. If `--sort oldest` was provided, use only the first form below. Otherwise, including explicit `--sort newest` or no `--sort`, use only the second form. Never run both forms.
+2. When `--label` is provided, replace `<label-filter>` in the selected form with `--label` followed by the supplied label as one shell argument, using shell quoting as needed. Otherwise, remove `<label-filter>`. GitHub applies this filter before the limit, so only matching issues count toward `<N * 2>`.
+3. Replace `<N * 2>` with the integer result of multiplying the requested issue count by 2, then run the selected command.
+
 ```bash
 # --sort oldest
-gh issue list --state open --limit <N * 2> --search "sort:created-asc" --json number,title,body,labels,assignees
+gh issue list --state open <label-filter> --limit <N * 2> --search "sort:created-asc" --json number,title,body,labels,assignees
 # default (--sort newest)
-gh issue list --state open --limit <N * 2> --search "sort:created-desc" --json number,title,body,labels,assignees
+gh issue list --state open <label-filter> --limit <N * 2> --search "sort:created-desc" --json number,title,body,labels,assignees
 ```
 
 Filter out issues that (auto-discover only):
 - Are assigned to someone else
 - Match `--skip` pattern
-- Don't match `--label` filter (if set)
 - Already have an open PR linked. Check via `gh issue view <number> --json closedByPullRequestsReferences` (linked PRs) plus `gh pr list --state open --search "#<number> in:title,body"` and scan open PRs whose branch name suggests the issue number. If any linked or referencing open PR exists, skip.
 
 Before selecting issues to dispatch, verify **every candidate** (including explicit `--issues`) against `<head-sha>`. For each candidate issue `<N>`:
@@ -80,7 +87,7 @@ When `--screen` is set, apply an additional quality filter to each remaining can
 - **Bug without reproduction:** any label contains `bug` (case-insensitive) and the body contains none of: a fenced code block, an error indicator (`Error:`, `Traceback`, `panic:`, `FAIL`, or `at ` followed by a file path), numbered steps, or a heading matching `repro`/`steps`/`how to`. Skip with reason **screened: bug without reproduction**.
 - **Underspecified:** body has no checklist items (`- [ ]` or `- [x]`), no numbered list, and is under 200 characters. Skip with reason **screened: underspecified**.
 
-Apply criteria in order; skip with the first matching reason.
+Apply criteria in order; skip with the first matching reason. An issue with a label containing `bug` and a body under 50 characters after stripping whitespace is caught by **no description** before it reaches **bug without reproduction**.
 
 Take the first `<N>` issues that pass filters, verification, and screening.
 
@@ -124,7 +131,7 @@ Dispatch one `agent` tool call per issue. Issue all calls for the current wave i
 - `model: "claude-sonnet-4-6"`
 - `id_prefix: "issue #<number>"` — prefixes the subagent id for log and trace correlation; on runtimes without `task_slug` support also gives the worktree branch an `iso-issue-<number>-...` name (note: when `agent_type` is set the live view label shows the agent type name, not this prefix)
 - `task_slug: "issue-<number>-<title-slug>"` — where `<title-slug>` is the issue title lowercased, non-alphanumerics collapsed to single hyphens, first 3–4 words (e.g. `issue-4112-telegram-retry-logic`). Gives the worktree branch a readable name like `afk/iso-issue-4112-telegram-retry-logic-x7k2qp`. Requires an agent-afk version with `task_slug` support; ignored on older versions.
-- Cap at **5 concurrent**. If there are more than 5 issues, batch them into waves of 5: dispatch wave 1 (5 calls in one reply), wait for all 5 to complete, then before dispatching each subsequent wave re-check that remaining candidate issues are still unclaimed (no new open PRs referencing them since the last wave). For each pending candidate run these two recheck calls in parallel (issue both in a single reply to halve inter-wave latency): `gh pr list --state open --search "#<N> in:title,body"` **and** `gh issue view <N> --json closedByPullRequestsReferences` (to catch PRs linked via GitHub's auto-close UI that won't appear in a title/body search). A PR that opens AND merges within one wave span could slip through both checks, but that window is temporally negligible and safe to ignore. If `gh` exits non-zero during either recheck call, log the issue number as **UNCHECKED**; UNCHECKED candidates are eligible for dispatch — treat them as unclaimed and proceed rather than skipping them. Then dispatch the next wave.
+- Cap at **5 concurrent**. If there are more than 5 issues, batch them into waves of 5: dispatch wave 1 (5 calls in one reply), wait for all 5 to complete, then before dispatching each subsequent wave re-check that remaining candidate issues are still unclaimed (no new open PRs referencing them since the last wave). For each pending candidate run these two recheck calls in parallel (issue both in a single reply to halve inter-wave latency): `gh pr list --state open --search "#<N> in:title,body"` **and** `gh issue view <N> --json closedByPullRequestsReferences`. A PR that opens AND merges within one wave span could slip through both checks, but that window is temporally negligible and safe to ignore. If `gh` exits non-zero during either recheck call, log the issue number as **UNCHECKED**; UNCHECKED candidates are eligible for dispatch — treat them as unclaimed and proceed rather than skipping them. Then dispatch the next wave.
 
 Each agent's prompt:
 
