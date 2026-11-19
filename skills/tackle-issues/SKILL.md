@@ -53,7 +53,11 @@ This fetch also determines where isolated subagent worktrees start: the runtime 
 
 If `--issues` provided, fetch those issue records directly with `gh issue view <n> --json number,title,body,labels,assignees` for each. **Do not apply `--label`, `--skip`, or assignee filters to explicit `--issues`; those flags apply only to auto-discovered issues.** Otherwise:
 
-When `--label` is provided, replace `<label-filter>` with `--label` followed by the supplied label as one shell argument, using shell quoting as needed. Otherwise, remove `<label-filter>`. GitHub applies this filter before the limit, so only matching issues count toward `<N * 2>`.
+Build and run exactly one discovery command using these rules:
+
+1. If `--sort oldest` was provided, use only the first form below. Otherwise, including explicit `--sort newest` or no `--sort`, use only the second form. Never run both forms.
+2. When `--label` is provided, replace `<label-filter>` in the selected form with `--label` followed by the supplied label as one shell argument, using shell quoting as needed. Otherwise, remove `<label-filter>`. GitHub applies this filter before the limit, so only matching issues count toward `<N * 2>`.
+3. Replace `<N * 2>` with the integer result of multiplying the requested issue count by 2, then run the selected command.
 
 ```bash
 # --sort oldest
@@ -125,7 +129,7 @@ Dispatch one `agent` tool call per issue. Issue all calls for the current wave i
 - `model: "claude-sonnet-4-6"`
 - `id_prefix: "issue #<number>"` — prefixes the subagent id for log and trace correlation; on runtimes without `task_slug` support also gives the worktree branch an `iso-issue-<number>-...` name (note: when `agent_type` is set the live view label shows the agent type name, not this prefix)
 - `task_slug: "issue-<number>-<title-slug>"` — where `<title-slug>` is the issue title lowercased, non-alphanumerics collapsed to single hyphens, first 3–4 words (e.g. `issue-4112-telegram-retry-logic`). Gives the worktree branch a readable name like `afk/iso-issue-4112-telegram-retry-logic-x7k2qp`. Requires an agent-afk version with `task_slug` support; ignored on older versions.
-- Cap at **5 concurrent**. If there are more than 5 issues, batch them into waves of 5: dispatch wave 1 (5 calls in one reply), wait for all 5 to complete, then before dispatching each subsequent wave re-check that remaining candidate issues are still unclaimed (no new open PRs referencing them since the last wave). For each pending candidate run these two recheck calls in parallel (issue both in a single reply to halve inter-wave latency): `gh pr list --state open --search "#<N> in:title,body"` **and** `gh issue view <N> --json closedByPullRequestsReferences` (to catch PRs linked via GitHub's auto-close UI that won't appear in a title/body search). A PR that opens AND merges within one wave span could slip through both checks, but that window is temporally negligible and safe to ignore. If `gh` exits non-zero during either recheck call, log the issue number as **UNCHECKED**; UNCHECKED candidates are eligible for dispatch — treat them as unclaimed and proceed rather than skipping them. Then dispatch the next wave.
+- Cap at **5 concurrent**. If there are more than 5 issues, batch them into waves of 5: dispatch wave 1 (5 calls in one reply), wait for all 5 to complete, then before dispatching each subsequent wave re-check that remaining candidate issues are still unclaimed (no new open PRs referencing them since the last wave). For each pending candidate run these two recheck calls in parallel (issue both in a single reply to halve inter-wave latency): `gh pr list --state open --search "#<N> in:title,body"` **and** `gh issue view <N> --json closedByPullRequestsReferences`. A PR that opens AND merges within one wave span could slip through both checks, but that window is temporally negligible and safe to ignore. If `gh` exits non-zero during either recheck call, log the issue number as **UNCHECKED**; UNCHECKED candidates are eligible for dispatch — treat them as unclaimed and proceed rather than skipping them. Then dispatch the next wave.
 
 Each agent's prompt:
 
