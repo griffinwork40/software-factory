@@ -155,7 +155,7 @@ Full route:
    - `trivial` (check): "Does this pull request change only documentation,
      comments, formatting, lockfiles, or dependency version numbers, with no
      change to executable logic, configuration behavior, tests, or files that
-     drive agent or tool behaviour (such as skill definitions, agent prompts,
+     drive agent or tool behavior (such as skill definitions, agent prompts,
      command files, hook configurations, or plugin manifests)?"
    - `ready` (check): "Does this pull request look like finished work that is
      ready for review, with no WIP or draft markers, placeholder code, or TODOs
@@ -166,38 +166,42 @@ Full route:
      2. "Touches a public API, persistence or migrations, or concurrency."
      3. "Touches authentication, credentials, permissions, secret handling, or payments."
 3. Before routing, run a deterministic instruction-file check for every PR
-   (no Jev call; changed paths are already available locally):
+   (without sending anything to Jev):
 
    ```bash
    gh pr diff <N> --repo <repo> --name-only
    ```
 
-   A PR is an **instruction-file PR** if any returned path matches one of these
-   patterns (case-insensitive basename or path prefix match):
+   If this command exits with a nonzero status for a PR, mark that PR
+   `override: instruction-file` and route it Full instead of Light, subject to
+   the Deferred precedence in step 4.
 
-   | Pattern | Examples |
+   A PR is an **instruction-file PR** if any returned path matches a rule below.
+   All matching is case insensitive; directory rules match any path segment:
+
+   | Matching rule | Examples |
    |---------|----------|
    | `SKILL.md` (any directory) | `skills/pr-triage/SKILL.md` |
    | `AFK.md`, `CLAUDE.md`, `AGENTS.md` (any directory) | `AFK.md`, `docs/CLAUDE.md` |
-   | `skills/**`, `agents/**`, `commands/**` | `skills/review/SKILL.md` |
-   | `hooks/**`, `prompts/**` | `hooks/pre-tool.md` |
-   | Plugin manifests: `.claude-plugin/plugin.json`, `plugin.json` at repo root | `.claude-plugin/plugin.json` |
+   | Any directory segment named `skills`, `agents`, or `commands` | `skills/review/SKILL.md`, `plugins/x/agents/reviewer.md` |
+   | Any directory segment named `hooks`, `prompts`, or `.claude` | `hooks/pre-tool.md`, `.claude/commands/review.md`, `.claude/settings.json` |
+   | `plugin.json` directly inside any `.claude-plugin` directory, or `plugin.json` at repository root | `.claude-plugin/plugin.json`, `plugin.json` |
 
    In a prompt-only repository these files are the program; a diff that only
    touches them scores as trivial to Jev but requires a Full review.
    Mark every instruction-file PR with `override: instruction-file`.
 
-   **This override applies whether the pre-filter is on or off.** When the
-   pre-filter is off or fails open, every PR already goes Full, so the override
-   is a no-op in those cases. When the pre-filter runs, the override replaces
-   any Jev verdict for instruction-file PRs before the routing table is applied.
+   **This override only has an effect when the prefilter runs.** Otherwise,
+   every PR already goes Full. When it runs, the override replaces only the
+   `trivial` verdict for routing purposes; it does not replace the `ready`
+   verdict or the Deferred rule.
 
 4. Route each PR:
 
    | Route | Rule | Override | Wave 1 treatment |
    |-------|------|----------|------------------|
    | **Light** | `trivial` verdict is yes AND `risk` score < 1.0 | None | `skill review <pr-url> --light`, model `sonnet` |
-   | **Deferred** | (`isDraft` is true OR `ready` verdict is no) AND the PR was not named in `--prs` | None | Not reviewed; lands in SKIP with reason `deferred` |
+   | **Deferred** | (`isDraft` is true OR `ready` verdict is no) AND the PR was not named in `--prs` | Applies even with `override: instruction-file` | Not reviewed; lands in SKIP with reason `deferred` |
    | **Full** | Everything else, including every PR whose item errored | `instruction-file`: forced Full regardless of `trivial` verdict | Unchanged: `skill review <pr-url>`, model `claude-opus-4-6` |
 
    If a PR matches both Light and Deferred, Deferred wins.
@@ -205,8 +209,10 @@ Full route:
    still wins over Full for draft or not-ready PRs not named in `--prs`).
 5. **Fail open.** If the Jev call errors, the server refuses the paths, or an
    item returns an `error` (for example a diff over Jev's size limit), that PR
-   goes Full. Never retry by passing the diff as `text`: that pulls it into
-   context, which is what this wave exists to avoid.
+   goes Full. If the step 3 path check exits with a nonzero status, mark that PR
+   `override: instruction-file` so it goes Full instead of Light, subject to
+   the Deferred precedence in step 4. Never retry by passing the diff as `text`:
+   that pulls it into context, which is what this wave exists to avoid.
 6. Print the routing table under the manifest, then continue to Wave 1 without
    waiting. Routing is read-only, and the operator can pull any deferred PR back
    in at Wave 1.5.
@@ -556,14 +562,13 @@ satisfy this condition):
    - One bullet per merged PR: `- <title> (#<N>) @<author>`
    - If a prior tag exists, footer:
      `**Full Changelog**: https://github.com/<repo>/compare/<prior-tag>...<resolved-sha>`
-   (`<resolved-sha>` is snapshotted here at draft time. If commits land on the
-   default branch during operator review (steps 4-5), the changelog URL will
-   reflect state at draft time, not at release time; this drift window lasts
-   however long the operator review takes, and is accepted.
-   Re-resolving the SHA immediately before step 7 would risk releasing commits
-   the operator never reviewed and that the drafted notes do not describe, so
-   only the changelog URL is affected by any drift; the release itself is always
-   pinned to the reviewed commit via `--target <resolved-sha>` in step 7.)
+   (`<resolved-sha>` is snapshotted here at draft time; the drift window lasts
+   however long the operator review takes and is accepted. If commits land on
+   the default branch during steps 4 and 5, only the changelog URL is affected
+   by that drift because the release itself is pinned to the reviewed commit
+   via `--target <resolved-sha>` in step 7. Resolving the SHA again immediately
+   before step 7 would risk releasing commits the operator never reviewed and
+   that the drafted notes do not describe.)
 4. Preview to the operator:
 
    ```
