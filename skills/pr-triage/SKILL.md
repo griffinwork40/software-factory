@@ -558,12 +558,12 @@ satisfy this condition):
      `**Full Changelog**: https://github.com/<repo>/compare/<prior-tag>...<resolved-sha>`
    (`<resolved-sha>` is snapshotted here at draft time. If commits land on the
    default branch during operator review (steps 4-5), the changelog URL will
-   reflect state at draft time, not at release time. This narrow drift window
-   (typically seconds to minutes of operator review) is accepted: re-resolving
-   the SHA immediately before step 7 would risk releasing commits the operator
-   never reviewed and that the drafted notes do not describe. The release itself
-   is always pinned to the reviewed commit via `--target <resolved-sha>` in
-   step 7, so only the changelog URL is affected by any drift.)
+   reflect state at draft time, not at release time; this drift window lasts
+   however long the operator review takes, and is accepted.
+   Re-resolving the SHA immediately before step 7 would risk releasing commits
+   the operator never reviewed and that the drafted notes do not describe, so
+   only the changelog URL is affected by any drift; the release itself is always
+   pinned to the reviewed commit via `--target <resolved-sha>` in step 7.)
 4. Preview to the operator:
 
    ```
