@@ -307,14 +307,22 @@ while the loop is stopped and not resumed:
 **Before the first merge**, check that the base branch is green:
 `gh pr view <first-N> --json baseRefName,baseRefOid` to get `<base>` and
 `<base_sha>`, then `gh api repos/{owner}/{repo}/commits/<base_sha>/check-runs`.
-Record its `total_count` as `base_check_count`. Initialize `merged_paths` to
-an empty set before the loop.
-- `total_count` is 0: the base has no check runs, so the repo has no CI on this
-  branch. Treat the base as green and proceed. Do not wait for checks to appear.
-  Record once in the terminal summary: "base treated as green: no check runs at
-  <base_sha7>". Do not repeat this note after each merge.
+Also read
+`gh api repos/{owner}/{repo}/commits/<base_sha>/status --jq '{state, total_count}'`.
+If either API read fails, stop the merge loop with the error text; do not merge.
+Record the sum of check runs `total_count` and status `total_count` as
+`base_check_count`. Initialize `merged_paths` to an empty set before the loop.
+When status `total_count` is above 0, treat `state` of `failure` or `error` as
+failing and `pending` as pending in the rule below. Ignore status `state` when
+its `total_count` is 0.
+- `base_check_count` is 0: the base has no check runs or commit statuses, so the
+  repo has no CI on this branch. Treat the base as green and proceed. Do not wait
+  for checks to appear. Record once in the terminal summary: "base treated as
+  green: no check runs or commit statuses at <base_sha7>". Do not repeat this
+  note after each merge.
 - Otherwise, if any required workflow on `<base_sha>` is failing or still
-  pending, **stop the merge loop** and report: "Base branch <base> is red or
+  pending, or the combined status is failing or pending by the rule above,
+  **stop the merge loop** and report: "Base branch <base> is red or
   pending at <base_sha7>; not merging until it is green." Resume only after the
   operator confirms the base is clean.
 
@@ -373,12 +381,20 @@ For each GREEN PR in that order, **sequentially** (never parallel):
    `Closes #I`. A default merge carries that text onto the base and GitHub
    closes the issue. Before every merge:
    1. List the closing references in the PR title, body and every commit message:
-      `gh pr view <N> --json title,body,commits --jq '.title, .body, (.commits[] | .messageHeadline, .messageBody)' | grep -Eio '\b(close[sd]?|fix(e[sd])?|resolve[sd]?):?[[:space:]]+([[:alnum:]_.-]+/[[:alnum:]_.-]+#|https://github\.com/[[:alnum:]_.-]+/[[:alnum:]_.-]+/issues/|#)[0-9]+'`
-      (grep exits 1 when there are none). Also read
+      `gh pr view <N> --json title,body,commits --jq '.title, .body, (.commits[] | .messageHeadline, .messageBody)' > <run-dir>/closing-scan-<N>.txt`
+      Capture stderr and exit status separately. If this read exits nonzero,
+      do not merge; move the PR to BLOCKED with the error text. Only after a
+      successful read, scan the saved file:
+      `grep -Eio '\b(close[sd]?|fix(e[sd])?|resolve[sd]?):?[[:space:]]+([[:alnum:]_.-]+/[[:alnum:]_.-]+#|https://github\.com/[[:alnum:]_.-]+/[[:alnum:]_.-]+/issues/|#)[0-9]+' <run-dir>/closing-scan-<N>.txt`
+      Grep exit 1 means no matches; any other nonzero exit means BLOCKED with
+      the error text, not permission to merge. Also read
       `gh pr view <N> --json closingIssuesReferences --jq '[.closingIssuesReferences[].number]'`,
       which lists issues linked through the PR body or the Development sidebar
-      but not issues named only in commit messages. Ignore references that name
-      a different repository.
+      but not issues named only in commit messages. For this read and every
+      `gh issue view` and `allow_squash_merge` read below, capture stderr and
+      exit status; on nonzero exit or malformed output, do not merge and move
+      the PR to BLOCKED with the error text. Ignore references that name a
+      different repository.
    2. For each issue `#I` found, decide whether this PR fully addresses it.
       Read `gh issue view <I> --json title,body` and compare it with the PR
       body, the Wave 1 review result and the diff. Count `#I` as **partial**
@@ -389,9 +405,11 @@ For each GREEN PR in that order, **sequentially** (never parallel):
       one. When the evidence is unclear, count it as partial: an issue left
       open by mistake is cheap to close by hand, while a wrongly closed one
       hides unfinished work.
-   3. No partial issues: step 3 uses the default message. Continue to step 1b.
-   4. One or more partial issues: never use the default merge message. Build
-      an explicit one:
+   3. No partial issues: step 3 uses the default message. Continue to step 1b,
+      except an accepted update rescan returns to step 1b sub-step 5.
+   4. One or more partial issues: never use the default merge message. Read
+      `gh api repos/{owner}/{repo} --jq .allow_squash_merge` under the fail
+      closed read rule above, then build an explicit message:
       - Write the subject to `<run-dir>/merge-subject-<N>.txt`, starting from
         `<PR title> (#<N>)`. Rewrite every closing reference to a partial issue
         as `Refs #I`, preserving a sensible description and the PR number suffix.
@@ -404,6 +422,7 @@ For each GREEN PR in that order, **sequentially** (never parallel):
       - Before step 2, re-run the `grep -Eio` pattern from sub-step 1 on both
         the subject file and the body file. Confirm neither contains a closing
         reference to a partial issue; otherwise correct the files before proceeding.
+        Apply the same grep exit status rules from sub-step 1 to both file scans.
       - If a closing reference to a partial issue appears in the **PR body**,
         also write the rewritten body to `<run-dir>/pr-body-<N>.md` and, at
         merge time, run `gh pr edit <N> --body-file <run-dir>/pr-body-<N>.md`
@@ -415,8 +434,8 @@ For each GREEN PR in that order, **sequentially** (never parallel):
       - If a closing reference to a partial issue appears in a **commit
         message**, the merge must use `--squash`: `--merge` and `--rebase` put
         the original commits on the base unchanged, so their keywords still
-        close the issue. Check `gh api repos/{owner}/{repo} --jq .allow_squash_merge`.
-        If it is `false`, do not merge: move the PR to SKIP with reason
+        close the issue. If `allow_squash_merge` is `false`, do not merge:
+        move the PR to SKIP with reason
         "commit closes partial issue #I and squash merge is disabled; reword
         the commit, then re-run", and inform the operator.
       - If a partial issue is in `closingIssuesReferences` but no closing
@@ -452,10 +471,7 @@ For each GREEN PR in that order, **sequentially** (never parallel):
       Otherwise, if `git merge-base --is-ancestor origin/<base> refs/pr-sim/<N>` exits 0,
       the branch already contains the current base: skip to sub-step 5.
       Otherwise the branch must be updated.
-   4. Before updating, record `expected_tree` from
-      `git merge-tree --write-tree <fetched_sha> origin/<base>`; on command
-      failure, do not update and apply the "head moved" rule from step 1.
-      Update the branch with `gh pr update-branch <N>` only after the gate below.
+   4. Update the branch with `gh pr update-branch <N>` only after the gate below.
       This pushes a merge commit to the PR branch. Without `--auto-merge` (and
       always for Light route PRs), ask the operator first:
       `"#<N> touches <matched paths> and is behind <base>. Update its branch with <base> (pushes a merge commit) and wait for CI before merging? (y/n)"`
@@ -465,22 +481,35 @@ For each GREEN PR in that order, **sequentially** (never parallel):
       summary only after a successful update, taking `<current_base_sha7>` from
       `git rev-parse --short origin/<base>` in this iteration.
       If the operator declines, move the PR to SKIP with reason "needs a CI run
-      on the current base". If the command fails (for example a conflict, or a
-      fork that does not allow maintainer edits), move the PR to BLOCKED with
-      the error text.
+      on the current base". After approval (or its permitted bypass), immediately
+      before `gh pr update-branch <N>`, run `git fetch origin <base>`, record
+      `expected_base_sha` from `git rev-parse origin/<base>`, and record
+      `expected_tree` from
+      `git merge-tree --write-tree <fetched_sha> <expected_base_sha>`.
+      On any of these command failures, do not update and apply the "head moved"
+      rule from step 1 as qualified below. If the update command fails (for
+      example a conflict, or a fork that does not allow maintainer edits), move
+      the PR to BLOCKED with the error text.
       After a successful update, read `new_head` from
       `gh pr view <N> --json headRefOid`, its parents from
       `gh api repos/{owner}/{repo}/commits/<new_head> --jq '[.parents[].sha]'`,
       and its tree from
       `gh api repos/{owner}/{repo}/commits/<new_head> --jq .commit.tree.sha`.
-      Require exactly two parents in order: `<fetched_sha>` then the current
-      base SHA (`git rev-parse origin/<base>`), and require the tree to equal
+      Require exactly two parents in order: `<fetched_sha>` then
+      `expected_base_sha`, and require the tree to equal
       `expected_tree`. Refresh the local ref with
       `git fetch origin +pull/<N>/head:refs/pr-sim/<N>` and require
       `git rev-parse refs/pr-sim/<N>` to equal `new_head` too. Only when all
-      checks succeed, set `fetched_sha` to `new_head` and continue to sub-step 5.
-      On any mismatch or verification command failure, apply the "head moved"
-      rule from step 1. For any such entry (including a failed tree computation),
+      checks succeed, set `fetched_sha` to `new_head`, then re-run step 1a once
+      using fresh reads so the scan includes the new commit message. Discard
+      prior step 1a decisions and regenerate any message or PR body files from
+      these reads. Apply all step 1a rules, including BLOCKED and SKIP outcomes.
+      If still eligible, continue directly to sub-step 5, not back to step 1b
+      sub-step 1. This rescan happens once per accepted update and never triggers
+      another branch update by itself.
+      On any parent, tree or local ref mismatch or failure reading the new head,
+      parents, tree or local ref, apply the "head moved" rule from step 1.
+      For any such entry (including a failed tree computation),
       first read the current `headRefOid` as `<new_sha>`; if that read fails or
       it still equals `fetched_sha`, SKIP with the verification error rather than
       requesting approval. An approved exception restarts at step 1a once, so
@@ -520,8 +549,13 @@ For each GREEN PR in that order, **sequentially** (never parallel):
    When step 1a rewrote the message, run the `gh pr edit` from step 1a first if
    it applies, then merge with the explicit subject and body file:
    `gh pr merge <N> --squash --subject "$(cat <run-dir>/merge-subject-<N>.txt)" --body-file <run-dir>/merge-body-<N>.md --delete-branch --match-head-commit <fetched_sha>`
-   (use `--merge` in place of `--squash` only when no commit message holds a
-   closing reference to a partial issue and the repo strategy calls for it).
+   Use `--merge` in place of `--squash` in that same command, keeping the explicit
+   subject and body file, when squash is disabled and no commit message holds a
+   closing reference to a partial issue, or when no such commit reference exists
+   and the repo strategy calls for merge commits.
+   If `gh pr merge` exits nonzero, move the PR to BLOCKED with the error text
+   and note any PR body edit already made in the terminal summary. Do not run
+   step 4 for a failed merge; continue to the next PR.
    **`--match-head-commit` is the last-resort guard against merge races.** If a
    concurrent pr-triage run (or any other actor) merges this PR or pushes new
    commits between step 1's state check and this merge call, GitHub will reject
@@ -534,19 +568,34 @@ For each GREEN PR in that order, **sequentially** (never parallel):
    First, obtain and record `new_base_sha`:
    `gh api repos/{owner}/{repo}/git/ref/heads/<base> --jq .object.sha`
    Wait 5 s for CI to pick up the new base SHA, then check
-   `gh api repos/{owner}/{repo}/commits/<new_base_sha>/check-runs`.
-   - `total_count` is 0 and `base_check_count` is 0: the repo has no CI. Treat
-     the new base as green and proceed to the next PR.
-   - `total_count` is 0 but `base_check_count` was above 0: CI has not
-     registered the new SHA yet. Re-check every 10 s, up to 3 minutes (18
-     attempts). If it is still 0, **stop the merge loop** and inform the
-     operator: "No check runs appeared on <base> at <new_base_sha7> after
-     merging #<N>; not merging further until CI reports."
+   `gh api repos/{owner}/{repo}/commits/<new_base_sha>/check-runs` and
+   `gh api repos/{owner}/{repo}/commits/<new_base_sha>/status --jq '{state, total_count}'`.
+   On either read failure, stop the merge loop with the error text; do not merge
+   further. For each read or retry, compute `new_base_check_count` as the sum
+   of both `total_count` values. When status `total_count` is above 0, treat
+   `state` of `failure` or `error` as failing and `pending` as pending in the
+   rule below; ignore status `state` when its `total_count` is 0.
+   - `new_base_check_count` is 0 and `base_check_count` is 0: the repo has no CI.
+     Treat the new base as green and proceed to the next PR.
+   - `new_base_check_count` is 0 but `base_check_count` was above 0: CI has not
+     registered the new SHA yet. Read both endpoints again every 10 s, up to
+     3 minutes (18 attempts). If the sum becomes positive, apply the rule below.
+     If it is still 0 at the limit, **stop the merge loop** and inform the
+     operator: "No check runs or commit statuses appeared on <base> at
+     <new_base_sha7> after merging #<N>; not merging further until CI reports."
+     Resume only after the operator confirms CI has reported on the base.
    - Otherwise, if any required workflow is failing or still pending on the new
-     base SHA, **stop the merge loop** and inform the operator: "Base branch
+     base SHA, or the combined status is failing or pending by the rule above,
+     **stop the merge loop** and inform the operator: "Base branch
      <base> is red or pending at <new_base_sha7> after merging #<N>; not merging
      further until it is green." Resume only after the operator confirms the
      base is clean.
+   After a green result, set `base_check_count` to `new_base_check_count` before
+   proceeding to the next PR.
+
+Whenever the merge loop stops, retain PRs not yet attempted for a possible
+resume. If the run ends without resuming, list them as not attempted in the
+terminal summary; do not silently count them as merged, SKIPped or BLOCKED.
 
 #### 2B — Fix Blocked PRs
 
@@ -770,6 +819,15 @@ Report Done with a structured summary:
 | Deferred (pre-filter) | #108 | Not reviewed |
 | Still blocked | #107 | Needs upstream API change |
 | Release | — | <tag> (<url>) / skipped / not requested |
+
+Notes:
+1. Rewritten merge messages: <PR, rewritten references, subject and full body contents, or none>.
+2. PR body edits: <PR, yes/no; include edits already made when a merge failed>.
+3. Branch updates: <PR, base and base SHA, or none>.
+4. Merges without a fresh-base run: <PR and matched paths, or none>.
+5. Base treated as green with zero check runs and commit statuses: <base SHA, or none>.
+6. Merged unreviewed SHA: <PR and approved SHA, or none>.
+7. PRs not attempted after a stopped merge loop: <PRs and stop reason, or none>.
 
 Session closed <N> of <M> PRs. Pre-filter: <on: X light, Y deferred | off: reason>.
 ```
