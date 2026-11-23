@@ -15,6 +15,7 @@ failure_modes:
   - NESTED_REVIEW_COLLISION: "/review invoked from a subagent hits max_depth. Mitigation: context: load — land runs in the top-level coordinator and calls /review and /fix-pr directly, never from a fork."
   - DUPLICATE_ISSUES: "Follow-ups re-file something already tracked. Mitigation: search open issues per follow-up; comment on the existing issue instead of creating a new one."
   - STALE_LEDGER_TRUSTED: "A resumed run inherits an earlier run's flags, its 'no operator rules' line, or a round that never went through /review, and merges on that basis. Mitigation: resume re-runs preflight in full, takes flags only from the current invocation, and accepts a recorded round only when the ledger holds the verbatim Decision line at the current head SHA."
+  - STALE_CI: "A PR's last green CI run was performed against a base commit that predates the current tip of origin/<base>. The check passed on a tree that no longer exists, so it cannot guarantee the PR is clean on the real base. Mitigation: Phase 2 step 3a checks git merge-base --is-ancestor origin/<base> <reviewed_sha>; if the PR branch does not contain the current base, land stops at BLOCKED and instructs the operator to update the branch and re-run CI before merging."
 ---
 
 # land
@@ -126,6 +127,23 @@ Write to the ledger: `reviewed_sha`, the verbatim `Decision:` line, and one row 
 1. Re-fetch `gh pr view <pr> --json state,headRefOid,mergeable,mergeStateStatus`. MERGED by someone else → ALREADY-LANDED. CLOSED → BLOCKED.
 2. `headRefOid == reviewed_sha`. If it differs, the head moved after review → go back to 1b with one extra round allowed (no fix needed, just re-review).
 3. Checks green on `reviewed_sha` (re-run 1c).
+3a. **CI-freshness check.** Verify that the PR's last CI run was performed on top of
+    the current base, not a stale one. Run:
+    ```
+    git fetch origin <base>
+    git merge-base --is-ancestor origin/<base> <reviewed_sha>
+    ```
+    - Exit 0 → the PR branch already contains the current base tip; CI is fresh. Continue.
+    - Exit 1 → the PR branch is **behind** `origin/<base>`: its last green CI run
+      predates commits that have since landed on the base. The check passed on a
+      tree that no longer exists and cannot guarantee a clean merge.
+      Stop with **BLOCKED**: "PR #<N> last CI run is stale — branch is behind
+      origin/<base> (<base_sha7>). Update the branch (`gh pr update-branch <N>`)
+      and wait for a fresh green CI run before merging. Refs #5079."
+      Record in the ledger: `ci-freshness: STALE — origin/<base> <base_sha7> not
+      ancestor of <reviewed_sha7>`.
+    - Any other exit or command failure → BLOCKED with the error text; never merge
+      on an unreadable result.
 4. `mergeable == MERGEABLE`. If `mergeStateStatus` is `BLOCKED` for branch protection (a required approving review), stop at **READY** naming the missing requirement. Never bypass protection, never `--admin`.
 5. Authority: `--no-merge` → READY. Model-routed without `--auto-merge` → `ask_question` confirm ("Merge #N '<title>' at <sha7> via <strategy>?"). A decline or no handler → READY.
 6. Merge:
