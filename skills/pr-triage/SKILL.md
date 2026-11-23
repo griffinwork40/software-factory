@@ -16,6 +16,7 @@ failure_modes:
   - GH_AUTH_MISSING: "gh CLI is not authenticated. Mitigation: fail closed in Wave 0 before any work begins."
   - SCRATCH_DIR_COLLISION: "Two concurrent pr-triage sessions share scratch paths and corrupt each other's state. Mitigation: per-run scratch directory with timestamp and random suffix."
   - UNREVIEWED_HEAD_MERGE: "PR head moves after review but before merge, landing unreviewed commits. Mitigation: --match-head-commit on every merge; GitHub refuses if the head moved."
+  - STALE_CI: "A PR's last green CI run was performed against a base commit that predates the current tip of origin/<base>. The check passed on a tree that no longer exists, so it cannot guarantee the PR is clean on the real base. Mitigation: Wave 2A step 1b sub-step 2a checks git merge-base --is-ancestor origin/<base> refs/pr-sim/<N> for every GREEN PR; if the branch does not contain the current base and no ratchet/baseline path was matched, the PR moves to SKIP with instructions to update the branch and re-run CI. When a ratchet/baseline path was matched the existing branch-update path (sub-steps 3-5) handles the refresh."
   - DUPLICATE_ADVISORY_ISSUES: "Wave 2C creates advisory issues that duplicate existing open issues. Mitigation: session-unique tag in title; exact title-prefix match search; recent-issue search (last hour) before creating; comment on existing issue instead, or skip creation."
   - CONCURRENT_RUN_MERGE_RACE: "Two parallel pr-triage runs on the same repo can both pass the pre-merge state check before either completes gh pr merge. Mitigation: Wave 0 warns when a sibling pr-triage session is detected via list_sessions; --match-head-commit is the last-resort hard guard (GitHub rejects the second merge if the head moved). The TOCTOU window between the final state check and the merge call is accepted as irreducible without repo-side locking."
   - CONCURRENT_RUN_ISSUE_DEDUP_RACE: "Two parallel runs can both search for an existing issue, find nothing, and both create the same follow-up issue. Mitigation: session-unique tag in the issue title makes each run's issues distinct; recent-issue search (last hour) before filing catches a sibling's just-created issue."
@@ -501,7 +502,27 @@ For each GREEN PR in that order, **sequentially** (never parallel):
       | Repo docs | The path is listed under `linguist-generated` in `.gitattributes`, or AFK.md, CLAUDE.md or CONTRIBUTING names it (or a directory or glob containing it) as generated, ratchet or baseline content, or as the output of a documented regenerate or baseline-update command (the same search Wave 2B uses). |
       | This run | The path is in `merged_paths`, the set of paths changed by PRs merged earlier in this run (step 4 records it; empty before the first merge). |
 
-      If no path matches, go to step 2.
+      If no path matches, go to sub-step 2a.
+   2a. **CI-freshness check (all PRs).** Regardless of whether any ratchet or
+       baseline path was matched, verify that the PR's last CI run was performed
+       on top of the current base:
+       ```
+       git merge-base --is-ancestor origin/<base> refs/pr-sim/<N>
+       ```
+       - Exit 0 → the PR branch already contains the current base tip. If no
+         ratchet/baseline path was matched, skip to step 2. If a ratchet/baseline
+         path was matched, continue to sub-step 3.
+       - Exit 1 → the PR branch is **behind** `origin/<base>`: its last green CI
+         run predates commits that have since landed on the base. The check passed
+         on a tree that no longer exists.
+         - If a ratchet/baseline path was matched: continue to sub-step 3
+           (the branch-update path already handles the refresh).
+         - Otherwise: move this PR to **SKIP** with reason "CI is stale — branch
+           is behind origin/<base> (<base_sha7>); update the branch
+           (`gh pr update-branch <N>`) and wait for a fresh green CI run before
+           merging. Refs #5079." Do not attempt merge; continue to the next PR.
+       - Any other exit or command failure → BLOCKED with the error text; never
+         merge on an unreadable result.
    3. First, if `base_check_count` is 0, go directly to step 2 without updating
       the branch. Record "#<N> touches <matched paths>; no CI in repo, merged
       without a fresh-base run" in the terminal summary only if merged.
